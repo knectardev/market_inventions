@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Market Inventions</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #111215;
+        --panel: #1b1d22;
+        --text: #e7e9ee;
+        --accent: #7cffc2;
+        --muted: #9aa3ad;
+      }
+
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      body.regime-bg-major {
+        background: linear-gradient(135deg, #0e1a15, #111215);
+      }
+
+      body.regime-bg-minor {
+        background: linear-gradient(135deg, #101824, #111215);
+      }
+
+      body.regime-bg-whole-tone {
+        background: linear-gradient(135deg, #1a1224, #111215);
+      }
+
+      body.regime-bg-diminished {
+        background: linear-gradient(135deg, #241a0f, #111215);
+      }
+
+      header {
+        padding: 20px 24px;
+        background: var(--panel);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      h1 {
+        font-family: "Times New Roman", ui-serif, serif;
+        font-size: 20px;
+        margin: 0;
+        letter-spacing: 0.4px;
+      }
+
+      main {
+        padding: 24px;
+        display: grid;
+        gap: 16px;
+        max-width: 920px;
+        margin: 0 auto;
+      }
+
+      .card {
+        background: var(--panel);
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+      }
+
+      .row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .metric {
+        flex: 1 1 200px;
+      }
+
+      .metric h2 {
+        margin: 0 0 8px 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--muted);
+      }
+
+      .metric div {
+        font-size: 20px;
+      }
+
+      #regime {
+        transition: color 0.3s ease;
+        font-weight: 600;
+      }
+
+      .regime-major {
+        color: #7cffc2;
+      }
+
+      .regime-minor {
+        color: #7aa7ff;
+      }
+
+      .regime-whole-tone {
+        color: #b18cff;
+      }
+
+      .regime-diminished {
+        color: #f1c04a;
+      }
+
+      button {
+        background: var(--accent);
+        border: none;
+        color: #101014;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      select {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-weight: 600;
+      }
+
+      .controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .visualizer {
+        height: 200px;
+      }
+
+      #piano-roll {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border-radius: 10px;
+        background: rgba(8, 9, 12, 0.7);
+      }
+
+      #status {
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Market Inventions</h1>
+      <div id="status">Disconnected</div>
+    </header>
+    <main>
+      <div class="card">
+        <div class="controls">
+          <button id="start">Start Audio</button>
+          <label>
+            Instrument
+            <select id="instrument">
+              <option value="harpsichord">Harpsichord</option>
+              <option value="pipe_organ">Pipe Organ</option>
+              <option value="strings">Strings</option>
+              <option value="electric_organ">Electric Organ</option>
+              <option value="flute">Flute</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="card row">
+        <div class="metric">
+          <h2>Soprano (QQQ)</h2>
+          <div id="soprano">--</div>
+        </div>
+        <div class="metric">
+          <h2>Bass (SPY)</h2>
+          <div id="bass">--</div>
+        </div>
+        <div class="metric">
+          <h2>Regime</h2>
+          <div id="regime">--</div>
+        </div>
+        <div class="metric">
+          <h2>Chord</h2>
+          <div id="chord">--</div>
+        </div>
+        <div class="metric">
+          <h2>Root Offset</h2>
+          <div id="root-offset">--</div>
+        </div>
+        <div class="metric">
+          <h2>Tick</h2>
+          <div id="tick">--</div>
+        </div>
+        <div class="metric">
+          <h2>RVOL</h2>
+          <div id="rvol">--</div>
+        </div>
+      </div>
+      <div class="card visualizer">
+        <canvas id="piano-roll"></canvas>
+      </div>
+      <div class="card" id="log"></div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+    <script src="script.js?v=6"></script>
+  </body>
+</html>

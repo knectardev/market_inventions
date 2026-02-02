@@ -76,4 +76,104 @@ The scale and "mood" shift based on the relationship between Price and its Expon
 
 ---
 
-**Next step for development:** Would you like me to generate the `Tone.js` sampler configuration so you can load high-quality harpsichord or pipe organ samples for that authentic Bach sound?
+## 7. Visual Data Acquisition (The "Optical" Module)
+* **Method:** Screen-capture of a defined Bounding Box (ROI - Region of Interest).
+* **Price Mapping:** * Top of ROI = Max Note.
+    * Bottom of ROI = Min Note.
+    * `y_pixel` position is normalized to the current scale degrees.
+* **Velocity/Tempo:** * Calculate `abs(y_now - y_prev)`. 
+    * If the distance is large, increase RVOL (Pace).
+* **Regime Detection:** * Sample pixel colors at the lead price point. 
+    * Green Pixels = Major/Whole Tone.
+    * Red Pixels = Minor/Diminished.
+
+---
+
+
+## 8. Two-Part Counterpoint (Invention Logic)
+* **Lead Voice (Soprano):** * Source: Ticker A (e.g., NQ).
+    * Rhythm: 16th notes.
+    * Function: Melodic flourishes and regime definitions.
+* **Secondary Voice (Bass):**
+    * Source: Ticker B (e.g., TNX or GLD).
+    * Rhythm: 8th or Quarter notes (1/2 the speed of Soprano).
+    * Function: Harmonic grounding and counter-motion.
+* **Divergence Rules:**
+    * If Ticker A and B are correlated: Force intervals of 3rds, 5ths, or 10ths.
+    * If Ticker A and B diverge: Allow dissonant intervals (2nds, 7ths) that must resolve on the next "Harmonic Clock" beat.
+* **Normalization:** Both tickers are normalized to their respective Opening Ranges to ensure they share the same "Middle C" starting point despite price differences.
+
+---
+
+## 9. Intermarket Normalization
+* **Anchor Scaling:** All price inputs are converted to `ticks_from_open` using: 
+  `delta_pct = (price - open) / open`.
+* **Step Sensitivity:** `1 Step = 0.1%` (adjustable). This ensures that volatility is audible; a 2% "God Candle" results in a 20-semitone melodic leap.
+* **Spatial Separation:** * **Soprano (Asset A):** Centers around MIDI 60-84.
+    * **Bass (Asset B):** Centers around MIDI 36-54.
+* **Consonance Filter:** * If `abs(Soprano - Bass) % 12` is a "Perfect Interval" (0, 7, 5), the market is in **Sync**.
+    * If the interval is a "Tritone" or "Minor Second" (6, 1), the assets are **Diverging** or in a **Regime Shift**.
+
+---
+
+## 10. System Routing & Latency
+* **MIDI Port:** Virtual MIDI Bus (Port Name: "Gemini Bach Port").
+* **Clock Sync:** The system uses a 'soft-clock' driven by the `time.sleep()` function.
+* **Volume-Tempo Curve:** * Exponential mapping: `Tempo = Base_BPM * (RVOL ^ 1.2)`. 
+    * This makes high-volume "blow-off tops" sound significantly more frenetic.
+* **Note Velocity:** * Soprano Velocity = 80 (to stand out).
+    * Bass Velocity = 60 (to provide a background floor).
+
+---
+
+## 11. Web Interface Implementation
+* **Audio Engine:** Tone.js (Web Audio API).
+* **Scheduling:** Tone.Transport for millisecond-perfect 16th-note resolution.
+* **Visualization:** * **The "Piano Roll" Chart:** A rolling canvas showing the notes being played.
+    * **The "Regime Indicator":** Color-coded background (Green=Major, Purple=Whole Tone, Red=Minor, Gold=Diminished).
+* **Data Transport:** Server-Sent Events (SSE) or WebSockets to push SPY/QQQ updates from the Python backend to the UI.
+
+---
+
+## 12. UI Controls & Sound Management
+* **Transport Control:** The app must start with the audio engine 'suspended'. A 'Start' button must trigger `Tone.start()`.
+* **Sample Management:** * Provide at least 3 distinct "Baroque" sounds: Harpsichord, Pipe Organ, and Strings.
+    * Use a Loading indicator or disable the Play button until samples are fully cached.
+* **Stop Function:** When stopped, clear all scheduled notes and silence the Sampler immediately using `sampler.releaseAll()`.
+
+---
+
+## 13. Active Timeline Visualization
+* **Playhead:** A fixed vertical line at 85% X-axis.
+* **Scroll Direction:** Notes enter from the right (future) and move left (past).
+* **Audio-Visual Sync:** Sound must trigger exactly when the note-block intersects the Playhead line.
+* **Contextual Grid:** Background should display horizontal faint lines representing the current Scale/Chord degrees to provide visual harmonic context.
+
+---
+
+
+## 14. Harmonic Intelligence & Alerting
+* **Cadence Logic:** The engine must resolve to 'home' tones every 16 beats to provide rhythmic structure.
+* **Divergence Monitoring:** Audible dissonance (Tritones/Minor Seconds) is triggered when SPY and QQQ correlation breaks.
+* **Minimal Jump Constraint:** Melodic leaps are capped at 5 semitones per tick to ensure "Bach-style" smoothness, regardless of price volatility.
+
+--- 
+
+## 15. The "Tritone" Divergence Alert
+* **Logic:** Calculate `interval % 12` between Soprano and Bass.
+* **Alert Trigger:** If interval is 1, 6, or 11, set `divergence = true`.
+* **Audio Response:** Apply a -100 cent detune or a BitCrusher effect to symbolize "Market Friction."
+* **Visual Response:** The Playhead line must pulse Red, and the background of the canvas should darken.
+
+--- 
+
+## 16. Dual-Channel Control & Multi-Axis UI
+* **Default State:** Initial instrument set to `Electric Organ` for both channels.
+* **X-Axis Units:** * 1 Unit = 1 Tick (16th Note).
+    * 4 Units = 1 Second (Quarter Note). 
+    * Labels should appear every 4 ticks (1s, 2s, 3s...).
+* **Dual Y-Axes:** * **Right:** QQQ Price Scale (tied to Soprano).
+    * **Left:** SPY Price Scale (tied to Bass).
+    * Scales must auto-range based on the min/max price currently visible in the sliding window.
+* **Mute/Hide Toggle:** Checkboxes per ticker that toggle both the Tone.js sampler output and the canvas rendering.
+

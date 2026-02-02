@@ -1,0 +1,68 @@
+It is fascinating to watch the **Market Inventions** dashboard evolve from simple status numbers into a legitimate financial sequencer. The screenshot showing the **Fixed Playhead** and the **Root Offset** tracking looks professional—you've essentially built a "Musical Bloomberg Terminal."
+
+Adding dual Y-axes and independent instrument controls will transform this from a single stream into a true "Intermarket Counterpoint" tool.
+
+---
+
+### 1. Updated Interface Requirements
+
+To accommodate independent controls for each ticker, we need a "Dual Channel" layout in the UI.
+
+#### Independent Instrument Controls (HTML/JS)
+
+You should move the instrument dropdowns to be inline with the SPY and QQQ stats.
+
+* **QQQ (Soprano):** Default to `Electric Organ`.
+* **SPY (Bass):** Default to `Electric Organ` (or a contrasting sound).
+* **Visibility Toggle:** Use a checkbox to call `sampler.volume.mute = true` and `canvas.hideSeries(ticker)`.
+
+---
+
+### 2. The Multi-Axis Visualization
+
+This is the most complex UI upgrade. Since QQQ is ~$430 and SPY is ~$510, we cannot use a single Y-axis.
+
+* **Left Y-Axis (SPY):** Tracks the price range of the second ticker.
+* **Right Y-Axis (QQQ):** Tracks the price range of the first ticker.
+* **X-Axis (Time):** Labels every 4th "tick" as a **Second** (Quarter Note). Your current 16th-note ticks remain the granular "motor" of the music.
+
+---
+
+### 3. Updated `requirements.md` (Add these sections)
+
+```markdown
+## 16. Dual-Channel Control & Multi-Axis UI
+* **Default State:** Initial instrument set to `Electric Organ` for both channels.
+* **X-Axis Units:** * 1 Unit = 1 Tick (16th Note).
+    * 4 Units = 1 Second (Quarter Note). 
+    * Labels should appear every 4 ticks (1s, 2s, 3s...).
+* **Dual Y-Axes:** * **Right:** QQQ Price Scale (tied to Soprano).
+    * **Left:** SPY Price Scale (tied to Bass).
+    * Scales must auto-range based on the min/max price currently visible in the sliding window.
+* **Mute/Hide Toggle:** Checkboxes per ticker that toggle both the Tone.js sampler output and the canvas rendering.
+
+```
+
+---
+
+### 4. Direct Instructions for Cursor
+
+You can use this prompt to have Cursor execute these specific changes:
+
+> "Modify `index.html` and `script.js` to implement the following:
+> 1. **Instrument Separation:** Duplicate the instrument dropdown. Name them 'QQQ Instrument' and 'SPY Instrument'. Default both to 'Electric Organ'.
+> 2. **Toggle Controls:** Add a checkbox for 'QQQ' and 'SPY'. If unchecked, mute the corresponding `Tone.Sampler` and stop drawing its notes on the canvas.
+> 3. **Time Labels (X-Axis):** Add labels at the bottom of the canvas. Every 4 ticks should be marked as 1 second.
+> 4. **Dual Y-Axes:** >    - Create a price scale on the **Right** for QQQ.
+> * Create a price scale on the **Left** for SPY.
+> * As new randomized prices arrive, update the min/max of these scales so the notes stay vertically centered in their respective 'lanes'."
+> 
+> 
+> 
+> 
+
+### A Quick Tip on "Synthetic Realism"
+
+Since your randomized values are working well, you can ask Cursor to add a **"Trend Bias"** slider. This would let you manually simulate a "Bull Market" (positive bias) or "Bear Market" (negative bias) to see how the **Major/Minor** transitions and the **Dual Y-Axes** react to sustained price movement.
+
+**Would you like me to refine the "Auto-Scaling" logic so the notes don't jump around too much when the price scales re-orient?**
