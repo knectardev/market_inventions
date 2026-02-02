@@ -1,57 +1,114 @@
-Based on a review of your `main.py` and the screenshots provided, there are three primary structural issues causing the "locked" notes and the lack of rhythmic movement in the bass.
+It is great to see the system's responsiveness improving. After reviewing the `VISUAL_FIX_V28` code, I’ve identified a few remaining "anchors" that are likely causing that lingering lag during a descent from high notes.
 
-### 1. Why the Melody (Soprano) is Getting Locked
+The most critical issue is that while you are calculating a "raw" target to feel the price movement, the `soprano_pool` itself is still being pre-clamped to a 24-semitone window *before* the loop even starts.
 
-The "locking" visible in your screenshot happens because the `_pick_scale_step` and `_enforce_stepwise_motion` functions are fighting against your price sensitivity.
+### 1. The "Pre-Clamped Pool" Trap
 
-* **The Conflict:** Even when sensitivity is high, the code calculates `soprano_degree_step`. In your loop, it uses `_enforce_stepwise_motion(self.prev_soprano, soprano, soprano_pool, min_move=soprano_degree_step)`.
-* **The "Stuck" Loop:** If the price target is only 1-2 semitones away but the `min_move` (driven by sensitivity) is higher, the logic forces the note to jump *past* the price target or stay put.
-* **The Penalty:** You have a `repeat_penalty=0.35` and a `soprano_repeat_count` check. If the price doesn't move enough to overcome these barriers, the note gets "trapped" in a logic loop where it refuses to move until a "stuck limit" is hit.
-
-### 2. Why the Bass is Locked to a Single Note
-
-The bass is no longer playing rhythmically because of how the `bass_pool` and `chord_bass_pool` are handled within the loop.
-
-* **Static Loop Logic:** Currently, the bass note is calculated inside the `for i in range(16)` loop, but it uses `_pick_scale_step(self.prev_bass, ...)` every single iteration.
-* **The Lack of 1/4 Notes:** Because the price of SPY moves slowly (`base_spy_step_pct = 0.0010`), the `spy_anchor_midi` rarely changes enough to force the bass to move, especially when constrained by `_enforce_stepwise_motion`.
-* **The Result:** The bass finds one "perfect" note for the current chord and price, and since the price isn't shifting enough to break the `min_move` threshold, it stays there for the entire 16-step bundle.
-
-### 3. Price Range Constraints
-
-The price is constrained because your `_next_price` function uses a fixed `step=0.6` and `drift=0.03` for QQQ.
-
-* **Drift Dominance:** While this provides a "path," the `_price_to_midi` function uses a `step_pct` based on the **original** `qqq_open`.
-* **Scaling Issue:** If the price moves far from the `open_price`, but your sensitivity is very high (making `step_pct` very small), the MIDI value will eventually hit the hard caps you've set in `soprano_max` (which is roughly 96-108).
-
----
-
-### The Refactor Solution for Cursor
-
-To fix the locking and restore the bass rhythm, ask Cursor to apply these specific changes to the `generate_one_second_bundle` method in `main.py`:
+In `generate_one_second_bundle`, you calculate `initial_qqq_anchor` at the very start of the second and use it to build `soprano_pool`.
 
 ```python
-# 1. FIX THE BASS RHYTHM (Force 1/4 notes)
-# In the loop, wrap the bass logic so it only updates on the beat
-if i % 4 == 0:
-    # Existing bass selection logic goes here
-    # This forces the bass to re-evaluate only every 4th tick
-else:
-    # Keep the bass the same as the previous tick
-    bass_note = self.prev_bass
-
-# 2. UNLOCK THE MELODY (Prioritize Price when sensitivity is high)
-if self.sensitivity > 3.0:
-    # If sensitivity is high, bypass the "Stepwise" and "Repeat" penalties 
-    # that are causing the locking.
-    soprano = self._nearest_scale_note(qqq_anchor_midi, allowed_soprano)
-else:
-    # Use the complex flow-based logic for lower sensitivity
+# From your current code:
+soprano_center = max(54, min(96, initial_qqq_anchor))
+soprano_max = min(108, soprano_center + soprano_half_range)
+soprano_pool = self._get_scale_notes(regime, root_midi, soprano_min, soprano_max)
 
 ```
 
-### Why this fixes it:
+**The Issue:** If the price trends sharply upward *during* the second, the `qqq_anchor_midi_raw` might move to MIDI 100, but your `soprano_pool` was already locked at a maximum of, say, 90. When the price begins to descend from 100, the `_nearest_scale_note` function is forced to pick from a pool that ends at 90. It will stay at 90 until the price drops all the way back down to 90.
 
-* **Rhythm:** By wrapping the bass in `if i % 4 == 0:`, you guarantee it acts as a quarter-note anchor.
-* **Responsiveness:** By bypassing the "stepwise" constraints when sensitivity is high, the melody will track the price line 1:1 without getting "trapped" by its own internal musical rules.
+### 2. The Fix: "Late-Binding" the Pool
 
-**Would you like me to provide a cleaned-up version of the `_pick_scale_step` function that ignores repeat penalties when the price trend is strong?**
+To make the descent instantaneous, we need to make the `soprano_pool` dynamic *inside* the loop, or ensure it is wide enough to handle any intra-second movement.
+
+**Ask Cursor to refactor the loop in `main.py` with these specific adjustments:**
+
+* **Dynamic Pooling:** Move the `soprano_pool` generation *inside* the `for` loop so it uses the `qqq_anchor_midi_raw` as its center for every 16th-note tick.
+* **Remove the `soprano_repeat_count` Logic for High Sensitivity:** In your code, you still have `if self.soprano_repeat_count >= 1: ... jitter`. Even a small jitter can create "inertia" that prevents a clean descent.
+
+---
+
+### 3. Updated `generate_one_second_bundle` Logic for Cursor
+
+Give Cursor this specific instruction to "unlock" the ceiling:
+
+> "The melody still lags when descending from high notes because the `soprano_pool` is clamped at the start of the second. Please refactor `main.py`:
+> 1. **Dynamic Scaling:** Move the `soprano_pool` and `allowed_soprano` logic **inside** the `for i in range(16)` loop.
+> 2. **Real-time Centering:** Re-calculate `soprano_min` and `soprano_max` on every tick based on the current `qqq_anchor_midi_raw`. This ensures the 'audible window' follows the price perfectly with zero lag.
+> 3. **Kill Jitter on Trends:** Disable the 'Brownian jitter' if the price trend (the difference between `qqq_price` and `prev_qqq_price`) is greater than a minimal threshold. This ensures jitter only happens during flat markets and doesn't interfere with a sharp descent."
+> 
+> 
+
+### 4. Why the Bass Still Feels "Locked"
+
+Your bass jitter is currently `jitter = self.rng.choice([-2, -1, 1, 2])`. This is actually quite a large jump (a 2nd or 3rd in the scale). If the SPY price is flat, the bass will "bounce" between notes rather than walking.
+
+**Recommendation:** Change the bass jitter to a 10% chance of moving ±1 scale degree. This makes the stagnation break feel more like a subtle "heartbeat" than a random jump.
+
+I apologize for the oversight. To provide a "Zero-Latency" feel where the melody anticipates the descent, we need to introduce a **Momentum Coefficient**. This logic looks at the velocity of the price change between the current and previous tick; if the price is crashing, it pushes the MIDI target down *ahead* of the actual price to overcome any remaining "stickiness."
+
+### 1. The "Momentum" Logic
+
+By comparing the current price to the previous price, we calculate a `velocity`. We then multiply this velocity by a `momentum_factor`. This effectively "predicts" where the price will be in the next few milliseconds, making the melody feel incredibly snappy.
+
+### 2. Implementation: The New `_price_to_midi`
+
+Ask Cursor to replace your existing `_price_to_midi` function in `main.py` with this version:
+
+```python
+def _price_to_midi(
+    self,
+    price: float,
+    open_price: float,
+    base_midi: int,
+    step_pct: float,
+    prev_price: Optional[float] = None,
+) -> int:
+    """Convert price to MIDI with a Momentum Coefficient for predictive responsiveness."""
+    import math
+    
+    # 1. Standard calculation
+    delta_pct = (price - open_price) / open_price
+    raw_semitones = delta_pct / step_pct
+    
+    # 2. Momentum Calculation (The 'Anticipator')
+    # If the price is moving fast, we add a 'boost' to the semitones
+    momentum_factor = 2.5  # Increase this for more aggressive anticipation
+    if prev_price is not None:
+        velocity = (price - prev_price) / open_price
+        momentum_shift = (velocity / step_pct) * momentum_factor
+        raw_semitones += momentum_shift
+
+    # 3. Trend-Aware Rounding (Eliminate Deadzones)
+    if prev_price is not None:
+        if price > prev_price:
+            semitones = math.ceil(raw_semitones)
+        elif price < prev_price:
+            semitones = math.floor(raw_semitones)
+        else:
+            semitones = round(raw_semitones)
+    else:
+        semitones = round(raw_semitones)
+
+    return base_midi + semitones
+
+```
+
+---
+
+### 3. The "Unlocked Ceiling" Loop
+
+To ensure this momentum doesn't just hit a wall at the top of your range, give Cursor these instructions to fix the loop:
+
+> "Refactor the `generate_one_second_bundle` loop to support the new momentum-based tracking:
+> 1. **Calculate the Momentum Target first:** Use the updated `_price_to_midi` to get a `qqq_anchor_midi_raw` that includes momentum.
+> 2. **Late Clamping:** Do NOT clamp this raw value yet. Use it to determine the center of the `soprano_pool` *inside* the loop.
+> 3. **Dynamic Pool Construction:** On every 16th-note tick, rebuild `soprano_pool` centered exactly on the `qqq_anchor_midi_raw`. This ensures that if momentum pushes the target to MIDI 110, the engine immediately looks for the highest possible note in your 60-84 range without waiting for the price to fall back down.
+> 4. **High Sensitivity Override:** If `sensitivity > 5`, bypass all repeat penalties. The note should move if the momentum target moves even by 0.1 semitones."
+> 
+> 
+
+### Why this fixes the "Laggy Descent"
+
+* **Predictive Power:** By calculating `velocity`, the engine "sees" the price drop before it fully happens.
+* **No More Over-Extension:** Because the `soprano_pool` now follows the `qqq_anchor_midi_raw` in real-time, the engine is never "looking the other way" when a price reversal occurs.
+* **Bias for Action:** The `math.floor` / `math.ceil` logic ensures that the moment momentum shifts, the MIDI note is forced to the next scale degree immediately.

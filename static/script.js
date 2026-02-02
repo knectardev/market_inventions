@@ -235,7 +235,7 @@ const formatRootOffset = (rootOffset) => {
   return { offset: rootOffset, note: midiToNoteName(rootMidi) };
 };
 
-const addNoteEvent = (midi, voice, price, tick, offset, eventTime) => {
+const addNoteEvent = (midi, voice, price, tick, offset, eventTime, durationUnits = 1) => {
   noteEvents.push({
     midi,
     voice,
@@ -243,6 +243,7 @@ const addNoteEvent = (midi, voice, price, tick, offset, eventTime) => {
     tick,
     offset,
     time: eventTime ?? performance.now(),
+    durationUnits, // How many 16th-note units this note lasts (1, 2, or 4)
   });
   if (noteEvents.length > 400) {
     noteEvents.splice(0, noteEvents.length - 400);
@@ -367,14 +368,22 @@ const handleLegacyTick = ({
 
 const addVisualBundle = (bundle, baseEventTimeMs) => {
   const baseTime = baseEventTimeMs ?? performance.now();
+  let prevSopranoMidi = null;
+  let prevBassMidi = null;
+  
+  // Get rhythm setting to determine note duration
+  const sopranoRhythm = Number(sopranoRhythmSelect?.value ?? 16);
+  const sopranoDurationUnits = 16 / sopranoRhythm; // 4 for quarter, 2 for eighth, 1 for sixteenth
+  const bassDurationUnits = 4; // Bass always plays quarter notes
+  
   for (let i = 0; i < bundle.soprano_bundle.length; i += 1) {
     const offsetSeconds = i * SUB_STEP_SECONDS;
     const eventTime = baseTime + offsetSeconds * 1000;
     const tick = (bundle.start_tick ?? 0) + i;
 
     const sopranoMidi = bundle.soprano_bundle[i];
-    if (sopranoMidi !== null && sopranoMidi !== undefined) {
-      // Use note price (what the MIDI note represents) for visual positioning
+    // Only add visual note when the pitch changes (matching audio behavior)
+    if (sopranoMidi !== null && sopranoMidi !== undefined && sopranoMidi !== prevSopranoMidi) {
       const sopranoPrice = bundle.qqq_note_prices[i];
       addNoteEvent(
         sopranoMidi,
@@ -382,14 +391,16 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
         sopranoPrice,
         tick,
         0,
-        eventTime
+        eventTime,
+        sopranoDurationUnits
       );
+      prevSopranoMidi = sopranoMidi;
     }
 
     if (Array.isArray(bundle.bass_bundle)) {
       const bassMidi = bundle.bass_bundle[i];
-      if (bassMidi !== null && bassMidi !== undefined) {
-        // Use note price (what the MIDI note represents) for visual positioning
+      // Only add visual note when the pitch changes (matching audio behavior)
+      if (bassMidi !== null && bassMidi !== undefined && bassMidi !== prevBassMidi) {
         const bassPrice = bundle.spy_note_prices[i];
         addNoteEvent(
           bassMidi,
@@ -397,8 +408,10 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
           bassPrice,
           tick,
           0,
-          eventTime
+          eventTime,
+          bassDurationUnits
         );
+        prevBassMidi = bassMidi;
       }
     }
 
@@ -528,7 +541,12 @@ const drawVisualizer = () => {
         ? noteConfig.sopranoColor
         : noteConfig.bassColor;
     canvasCtx.fillStyle = color;
-    canvasCtx.fillRect(x, y - 3, 8, 6);
+    
+    // Calculate width based on note duration (1, 2, or 4 units)
+    // One 16th note unit = pixelsPerSecond / 16
+    const durationUnits = event.durationUnits ?? 1;
+    const noteWidth = (noteConfig.pixelsPerSecond / 16) * durationUnits;
+    canvasCtx.fillRect(x, y - 3, noteWidth, 6);
 
     if (toggleNoteLabels?.checked) {
       canvasCtx.fillStyle =
@@ -538,7 +556,7 @@ const drawVisualizer = () => {
       canvasCtx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
       canvasCtx.textAlign = "center";
       canvasCtx.textBaseline = "top";
-      canvasCtx.fillText(midiToNoteName(event.midi), x + 4, y + 6);
+      canvasCtx.fillText(midiToNoteName(event.midi), x + noteWidth / 2, y + 6);
     }
     // Connector lines removed - notes now directly track price position
   }
@@ -787,6 +805,10 @@ const scheduleBundle = (bundle, time) => {
   // Get soprano note duration based on rhythm setting
   const sopranoRhythm = Number(sopranoRhythmSelect?.value ?? 16);
   const sopranoDuration = sopranoRhythm === 4 ? "4n" : sopranoRhythm === 8 ? "8n" : "16n";
+  const rhythmInterval = 16 / sopranoRhythm; // 4 for quarter, 2 for eighth, 1 for sixteenth
+
+  let prevSopranoMidi = null;
+  let prevBassMidi = null;
 
   for (let i = 0; i < bundle.soprano_bundle.length; i += 1) {
     const offsetSeconds = i * SUB_STEP_SECONDS;
@@ -794,23 +816,39 @@ const scheduleBundle = (bundle, time) => {
 
     if (toggleQqq.checked) {
       const sopranoMidi = bundle.soprano_bundle[i];
-      if (sopranoMidi !== null && sopranoMidi !== undefined) {
+      // Only trigger note when it changes or at rhythm boundaries
+      // This prevents retriggering the same note multiple times
+      const shouldTriggerSoprano = 
+        sopranoMidi !== null && 
+        sopranoMidi !== undefined && 
+        sopranoMidi !== prevSopranoMidi;
+      
+      if (shouldTriggerSoprano) {
         sopranoSampler.triggerAttackRelease(
           Tone.Frequency(sopranoMidi, "midi"),
           sopranoDuration,
           scheduledTime
         );
+        prevSopranoMidi = sopranoMidi;
       }
     }
 
     if (toggleSpy.checked && Array.isArray(bundle.bass_bundle)) {
       const bassMidi = bundle.bass_bundle[i];
-      if (bassMidi !== null && bassMidi !== undefined) {
+      // Bass: only trigger on quarter note boundaries (every 4 ticks)
+      // This prevents retriggering held notes
+      const shouldTriggerBass = 
+        bassMidi !== null && 
+        bassMidi !== undefined && 
+        bassMidi !== prevBassMidi;
+      
+      if (shouldTriggerBass) {
         bassSampler.triggerAttackRelease(
           Tone.Frequency(bassMidi, "midi"),
-          "8n",
+          "4n",
           scheduledTime
         );
+        prevBassMidi = bassMidi;
       }
     }
   }
