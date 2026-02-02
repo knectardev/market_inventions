@@ -91,12 +91,12 @@ The scale and "mood" shift based on the relationship between Price and its Expon
 
 
 ## 8. Two-Part Counterpoint (Invention Logic)
-* **Lead Voice (Soprano):** * Source: Ticker A (e.g., NQ).
-    * Rhythm: 16th notes.
+* **Lead Voice (Soprano):** * Source: Ticker A (e.g., QQQ).
+    * Rhythm: User-selectable (Quarter, Eighth, or Sixteenth notes).
     * Function: Melodic flourishes and regime definitions.
 * **Secondary Voice (Bass):**
-    * Source: Ticker B (e.g., TNX or GLD).
-    * Rhythm: 8th or Quarter notes (1/2 the speed of Soprano).
+    * Source: Ticker B (e.g., SPY).
+    * Rhythm: Quarter notes (fixed) for harmonic stability.
     * Function: Harmonic grounding and counter-motion.
 * **Divergence Rules:**
     * If Ticker A and B are correlated: Force intervals of 3rds, 5ths, or 10ths.
@@ -144,10 +144,11 @@ The scale and "mood" shift based on the relationship between Price and its Expon
 ---
 
 ## 13. Active Timeline Visualization
-* **Playhead:** A fixed vertical line at 85% X-axis.
+* **Playhead:** A fixed vertical line at 50% X-axis (implemented).
 * **Scroll Direction:** Notes enter from the right (future) and move left (past).
-* **Audio-Visual Sync:** Sound must trigger exactly when the note-block intersects the Playhead line.
-* **Contextual Grid:** Background should display horizontal faint lines representing the current Scale/Chord degrees to provide visual harmonic context.
+* **Audio-Visual Sync:** Sound triggers when notes are scheduled, with visual events timestamped to match audio timing.
+* **Price Line Display:** Semi-transparent price lines for both QQQ (green, top) and SPY (blue, bottom) show market movement.
+* **Note Rendering:** Notes rendered as rectangular blocks positioned at the price they represent, color-coded by voice.
 
 ---
 
@@ -169,13 +170,17 @@ The scale and "mood" shift based on the relationship between Price and its Expon
 
 ## 16. Dual-Channel Control & Multi-Axis UI
 * **Default State:** Initial instrument set to `Electric Organ` for both channels.
+* **Instrument Options:** Electric Organ, Harpsichord, Pipe Organ, Strings, Flute (both channels independently selectable).
 * **X-Axis Units:** * 1 Unit = 1 Tick (16th Note).
     * 4 Units = 1 Second (Quarter Note). 
-    * Labels should appear every 4 ticks (1s, 2s, 3s...).
+    * Labels appear every 16 ticks (1s, 2s, 3s...).
 * **Dual Y-Axes:** * **Right:** QQQ Price Scale (tied to Soprano).
     * **Left:** SPY Price Scale (tied to Bass).
-    * Scales must auto-range based on the min/max price currently visible in the sliding window.
-* **Mute/Hide Toggle:** Checkboxes per ticker that toggle both the Tone.js sampler output and the canvas rendering.
+    * Scales auto-range based on the min/max price in visible window.
+* **Visibility Toggles:** Checkboxes per ticker that control:
+    * Audio output (mute sampler)
+    * Visual rendering (hide note blocks)
+* **Note Labels Toggle:** Optional display of MIDI note names (e.g., "C4", "G5") above note blocks.
 
 
 --- 
@@ -205,7 +210,108 @@ The scale and "mood" shift based on the relationship between Price and its Expon
 * **Patterning:** 16th-note figurate arpeggios applied to the interpolated axis to ensure continuous melodic movement.
 
 --- 
-## 20. Real-Time Volatility Control
+## 20. Elimination of Note Stagnation
+* **Mandatory Movement:** No more than 2 consecutive 16th notes may share the same pitch unless the price is exactly at a scale degree boundary.
+* **Pattern Injection:** The 16-step Arpeggio pattern must be added to the LERP-interpolated MIDI anchor for every sub-step.
+* **Hocketing:** Soprano (QQQ) and Bass (SPY) must have different rhythmic densities (16th vs 4th notes).
+
+--- 
+## 21. Real-Time Volatility Control
 * **Slider Range:** 0% (Static) to 100% (Extreme Volatility/Market Crash simulation).
 * **Audio Correlation:** High volatility increases the velocity and octave-range of the Sampler notes.
 * **Visual Correlation:** The 'Note Beads' on the canvas should vibrate further away from the central 'Price Line' as volatility increases.
+
+--- 
+
+## 22. Dynamic Range Tracking & Ceiling Fix
+* **Unclamped Target Tracking:** The engine tracks price movements using an unclamped raw MIDI target, even when the price exceeds the audible range. This ensures immediate response when price reverses from extremes.
+* **Dynamic Range Centering:** The note selection range (soprano: ±12 semitones, bass: ±10 semitones) dynamically centers around the current price position, not the opening price. This prevents "ceiling lock" and "floor lock" issues.
+* **Visual-Audio Alignment:** Note visual positions are calculated relative to the dynamic range center, ensuring notes always appear at their correct price positions regardless of how far the price has drifted from the opening.
+* **Sensitivity-Based Repeat Penalty:** 
+    * At sensitivity ≥ 5.0: Repeat penalty is disabled (0.0) for 1:1 price tracking
+    * At sensitivity < 5.0: Repeat penalty is 0.2 for musical smoothness
+* **Range Constraints:**
+    * Soprano: Centered on current price, clamped to MIDI 36-108 (hard limits)
+    * Bass: Centered on current price, clamped to MIDI 24-72 (hard limits)
+    * Both ranges expand/contract dynamically each second based on price movement
+
+--- 
+
+## 23. Rhythm Control Interface
+* **QQQ Rhythm Selector:** Dropdown control with three options:
+    * Quarter Notes (1/4) - 4 notes per second, longest sustain
+    * Eighth Notes (1/8) - 8 notes per second, moderate sustain
+    * Sixteenth Notes (1/16) - 16 notes per second, shortest sustain (default)
+* **Implementation:** New notes are generated only at rhythm boundaries; between boundaries, the previous note is held. This creates a "stepped" melodic contour at lower rhythmic densities.
+* **Audio Duration Sync:** Tone.js note duration automatically matches the selected rhythm (4n, 8n, or 16n).
+* **Real-Time Updates:** Rhythm changes are applied immediately via the `/config` endpoint without restarting playback.
+
+--- 
+
+## 24. Sensitivity System
+* **Sensitivity Slider:** Range 0.1x to 10.0x (default 1.0x)
+* **Price-to-MIDI Conversion:** Sensitivity inversely affects step percentage:
+    * QQQ base: 0.15% per semitone
+    * SPY base: 0.10% per semitone
+    * Adjusted formula: `step_pct = base_step_pct / sensitivity`
+* **High Sensitivity Mode (≥ 4.0):**
+    * Direct price tracking with nearest-scale-note selection
+    * Stochastic jitter when price is flat to prevent visual stagnation
+    * Jitter grows with repeat count (±1 to ±3 scale degrees)
+* **Low Sensitivity Mode (< 4.0):**
+    * Voice-leading with stepwise motion constraints
+    * Maximum degree steps limited to `round(sensitivity)`
+    * Repeat penalty applied to avoid jumpy movement
+
+--- 
+
+## 25. Price Noise Simulation
+* **Price Noise Slider:** Range 0.1x to 5.0x (default 1.0x)
+* **Purpose:** Simulates intra-second price volatility for more organic melodic movement
+* **Application:** Random walk noise added to LERP-interpolated price:
+    * Noise amplitude = `base_step × price_noise_multiplier`
+    * Applied to each 16th-note tick within the 1-second bundle
+* **Use Case:** Higher noise values create more melodic variation even when actual price is relatively flat
+
+--- 
+
+## 26. Visual Price Calculation Formula
+* **Core Principle:** Note visual position must match the pitch being played
+* **Soprano (QQQ) Formula:**
+    ```
+    soprano_offset_from_center = soprano_midi - dynamic_center_midi
+    qqq_note_price = bundle_start_price × (1 + soprano_offset_from_center × qqq_step_pct)
+    ```
+* **Bass (SPY) Formula:**
+    ```
+    bass_offset_from_center = bass_midi - dynamic_center_midi
+    spy_note_price = bundle_start_price × (1 + bass_offset_from_center × spy_step_pct)
+    ```
+* **Key Variables:**
+    * `dynamic_center_midi`: The MIDI note corresponding to the current price (recalculated each bundle)
+    * `bundle_start_price`: The price at the start of the 1-second bundle
+    * Notes above center appear above the price line; notes below center appear below
+
+--- 
+
+## 27. Build & Deployment
+* **Current Build:** VISUAL_FIX_V28
+* **Frontend Cache Management:** 
+    * Script version parameter (`script.js?v=34`)
+    * Visual cache buster in header (`CACHE TEST V4`)
+* **Backend Framework:** FastAPI with WebSocket support
+* **Hot Reload:** FastAPI auto-reloads on code changes during development
+* **Configuration Endpoint:** POST `/config` accepts:
+    * `sensitivity`: float (0.1 to 10.0)
+    * `price_noise`: float (0.1 to 5.0)
+    * `soprano_rhythm`: int (4, 8, or 16)
+
+--- 
+
+## 28. Known Limitations & Future Enhancements
+* **Regime Detection:** Currently locked to MAJOR scale; regime matrix logic not fully implemented
+* **Real Market Data:** Using simulated price movement; needs integration with actual market data API
+* **Harmonic Clock:** Chord progression system exists but is simplified (fixed to chord degree 1)
+* **Root Offset Motion:** Chromatic shifts are disabled (`enable_root_offset_motion = False`)
+* **RVOL Tempo:** Volume-based tempo changes not yet implemented (RVOL fixed at 1.0)
+* **Optical Module:** Screen-capture price extraction not implemented

@@ -1,212 +1,57 @@
-That 4-note repetition is happening because the musical "sub-sampling" is too rigid. If you have 16 notes per second but the price only updates once per second, the engine is likely just calculating the same "magnetic" anchor 16 times in a row, resulting in a stagnant melodic loop.
+Based on a review of your `main.py` and the screenshots provided, there are three primary structural issues causing the "locked" notes and the lack of rhythmic movement in the bass.
 
-To fix this and get that fluid Bach-style movement, we need to introduce **Micro-Variation** and **Rhythmic Distribution**.
+### 1. Why the Melody (Soprano) is Getting Locked
 
-### 1. The Problem: "Price Quantization"
+The "locking" visible in your screenshot happens because the `_pick_scale_step` and `_enforce_stepwise_motion` functions are fighting against your price sensitivity.
 
-If your code looks like this: `note = price_to_midi(current_1s_price) + chord_offset`, you will get the exact same note every time that chord offset repeats within that second.
+* **The Conflict:** Even when sensitivity is high, the code calculates `soprano_degree_step`. In your loop, it uses `_enforce_stepwise_motion(self.prev_soprano, soprano, soprano_pool, min_move=soprano_degree_step)`.
+* **The "Stuck" Loop:** If the price target is only 1-2 semitones away but the `min_move` (driven by sensitivity) is higher, the logic forces the note to jump *past* the price target or stay put.
+* **The Penalty:** You have a `repeat_penalty=0.35` and a `soprano_repeat_count` check. If the price doesn't move enough to overcome these barriers, the note gets "trapped" in a logic loop where it refuses to move until a "stuck limit" is hit.
 
-### 2. The Solution: Brownian Micro-Oscillation
+### 2. Why the Bass is Locked to a Single Note
 
-We need to allow the notes to "explore" the space between the 1-second price snapshots.
+The bass is no longer playing rhythmically because of how the `bass_pool` and `chord_bass_pool` are handled within the loop.
 
-* **Interpolation:** Instead of jumping from Price A to Price B every second, the engine should calculate a linear (or curved) path between them.
-* **Jitter:** Add a tiny amount of "Brownian Motion" (random walk) to each 16th note so they vibrate naturally around the trend line.
-* **Rhythmic Masking:** Not every 16th note should play. Bach uses rests and varying note lengths.
+* **Static Loop Logic:** Currently, the bass note is calculated inside the `for i in range(16)` loop, but it uses `_pick_scale_step(self.prev_bass, ...)` every single iteration.
+* **The Lack of 1/4 Notes:** Because the price of SPY moves slowly (`base_spy_step_pct = 0.0010`), the `spy_anchor_midi` rarely changes enough to force the bass to move, especially when constrained by `_enforce_stepwise_motion`.
+* **The Result:** The bass finds one "perfect" note for the current chord and price, and since the price isn't shifting enough to break the `min_move` threshold, it stays there for the entire 16-step bundle.
+
+### 3. Price Range Constraints
+
+The price is constrained because your `_next_price` function uses a fixed `step=0.6` and `drift=0.03` for QQQ.
+
+* **Drift Dominance:** While this provides a "path," the `_price_to_midi` function uses a `step_pct` based on the **original** `qqq_open`.
+* **Scaling Issue:** If the price moves far from the `open_price`, but your sensitivity is very high (making `step_pct` very small), the MIDI value will eventually hit the hard caps you've set in `soprano_max` (which is roughly 96-108).
 
 ---
 
-### 3. Implementation Logic (Backend)
+### The Refactor Solution for Cursor
 
-Update your `InventionEngine` to "predict" the path to the next second.
+To fix the locking and restore the bass rhythm, ask Cursor to apply these specific changes to the `generate_one_second_bundle` method in `main.py`:
 
 ```python
-def get_sub_second_note(start_price, end_price, sub_step, scale):
-    """
-    sub_step: 0-15 (the 16th notes within the second)
-    """
-    # 1. Linear Interpolation (The 'Path')
-    lerp_factor = sub_step / 16
-    current_path_price = start_price + (end_price - start_price) * lerp_factor
-    
-    # 2. Add 'Micro-Vol' (The 'Life')
-    # Adds a tiny bit of random movement so it's not a perfect straight line
-    micro_vol = random.uniform(-0.02, 0.02) 
-    active_price = current_path_price + micro_vol
-    
-    # 3. Apply Harmonic Clock
-    # This ensures the 'random' movement still lands on a chord tone
-    return calculate_magnetic_note(active_price, sub_step, scale)
+# 1. FIX THE BASS RHYTHM (Force 1/4 notes)
+# In the loop, wrap the bass logic so it only updates on the beat
+if i % 4 == 0:
+    # Existing bass selection logic goes here
+    # This forces the bass to re-evaluate only every 4th tick
+else:
+    # Keep the bass the same as the previous tick
+    bass_note = self.prev_bass
+
+# 2. UNLOCK THE MELODY (Prioritize Price when sensitivity is high)
+if self.sensitivity > 3.0:
+    # If sensitivity is high, bypass the "Stepwise" and "Repeat" penalties 
+    # that are causing the locking.
+    soprano = self._nearest_scale_note(qqq_anchor_midi, allowed_soprano)
+else:
+    # Use the complex flow-based logic for lower sensitivity
 
 ```
 
----
+### Why this fixes it:
 
-### 4. Direct Instructions for Cursor
+* **Rhythm:** By wrapping the bass in `if i % 4 == 0:`, you guarantee it acts as a quarter-note anchor.
+* **Responsiveness:** By bypassing the "stepwise" constraints when sensitivity is high, the melody will track the price line 1:1 without getting "trapped" by its own internal musical rules.
 
-To break the 4-note repetition loop, give Cursor this prompt:
-
-> "The music feels too repetitive because it's playing the same notes for the entire 1-second price duration. Please update `main.py`:
-> 1. **Linear Interpolation:** Calculate a smooth price bridge between the 'Current Price' and the 'Previous Price' across the 16 sub-steps.
-> 2. **Melodic Variation:** Within each 1-second window, ensure the 16th notes follow a more complex melodic contour (e.g., alternating between the root, 3rd, and 5th of the current chord) rather than just sitting on one note.
-> 3. **Rhythmic Hocketing:** For the SPY (Bass) track, make it only play on the 1st and 3rd quarter note of each second (8th note feel), while QQQ (Soprano) handles the 16th note flourishes. This creates the 'Invention' counterpoint feel."
-> 
-> 
-
----
-
-### 5. Updated Requirements (`requirements.md`)
-
-```markdown
-## 18. Sub-Second Melodic Fluidity
-* **Path Interpolation:** Notes must follow a linear interpolation (LERP) between 1-second snapshots to avoid "blocky" melodic movement.
-* **Arpeggiation:** If price is flat, the 16th notes should arpeggiate through the active chord (Root-3rd-5th-3rd) rather than repeating the same pitch.
-* **Counterpoint Density:** * Soprano: High density (16th notes).
-    * Bass: Lower density (8th or Quarter notes) to provide a stable harmonic floor.
-
-```
-
-To achieve a rock-solid, one-second sync while breaking the repetitive four-note loop, we need to shift from "reactive" polling to a **Predictive Scheduling** model.
-
-In this setup, your frontend `Tone.Transport` acts as the master conductor. It doesn't just play what the backend sends; it asks the backend for a "one-second bundle" of music and schedules those 16 notes precisely into the future. This ensures that even if there is network jitter, the music plays with sample-accurate timing.
-
-### 1. The 16-Step Arpeggio Pattern (Micro-Variation)
-
-To stop the "4-note repeat," we introduce a **Figurate Arpeggio** pattern. Even if the market price is perfectly flat for one second, the notes will cycle through the active chord's degrees (Root, 3rd, 5th) in a classic Baroque "broken chord" style.
-
-**The Pattern Logic (16th notes):**
-`[0, 2, 4, 2, 0, 4, 7, 4, 0, 2, 4, 2, 7, 4, 2, 0]`
-*(Indices represent scale degrees: 0=Root, 2=3rd, 4=5th, etc.)*
-
----
-
-### 2. High-Precision Sync: The "Tale of Two Clocks"
-
-To match a "realistic" one-second duration, we use `Tone.Transport` to bridge the gap between Javascript's imprecise `setInterval` and the Web Audio API's sample-accurate hardware clock.
-
-**The Strategy:**
-
-1. **Frontend:** Every 1 second, the browser sends a "Request Data" signal to the backend.
-2. **Backend:** Returns a list of 16 notes. These notes are **interpolated** linearly between the previous price and the new target price.
-3. **Frontend:** Loops through the 16 notes and schedules them using `Tone.Transport.schedule`.
-
----
-
-### 3. Implementation Logic (The "LERP" Interpolator)
-
-Your `main.py` should now calculate a smooth "bridge" so the melody doesn't jump abruptly at the start of every second.
-
-```python
-def generate_one_second_bundle(start_price, end_price, current_scale, chord):
-    bundle = []
-    # Figurate Arpeggio Pattern (Baroque style)
-    pattern = [0, 2, 4, 2, 0, 4, 7, 4, 0, 2, 4, 2, 7, 4, 2, 0]
-    
-    for i in range(16):
-        # 1. Linear Interpolation (LERP) for the 'Price Path'
-        lerp_price = start_price + (end_price - start_price) * (i / 16)
-        anchor_midi = price_to_midi(lerp_price)
-        
-        # 2. Add the Arpeggio offset based on the pattern
-        # This keeps the 'magnetic' center while providing movement
-        offset = pattern[i] 
-        note = anchor_midi + scale_degrees[offset]
-        
-        bundle.append(note)
-    return bundle
-
-```
-
----
-
-### 4. Direct Instructions for Cursor
-
-Use this prompt to align the clocks and the musicality:
-
-> "Update the architecture to use **Predictive One-Second Scheduling**:
-> 1. **Backend (`main.py`):** Modify the WebSocket to send a bundle of 16 notes every second. Implement a **Linear Interpolation (LERP)** between the last price and current price so the 16 notes create a smooth bridge. Apply a **Figurate Arpeggio pattern** (0-2-4-2...) to these notes so they aren't repetitive.
-> 2. **Frontend (`script.js`):** Use `Tone.Transport.bpm.value = 60` (making 1 quarter note = 1 second). Use a `Tone.Loop` that fires every 1 second.
-> 3. **Sync:** In the loop, take the 16-note bundle from the backend and schedule each note at precisely `time + (i * 0.0625)` seconds. This ensures the music is perfectly synced to a 1-second real-world clock.
-> 4. **Visualization:** Ensure the 'Price Line' and 'Note Beads' are drawn using the same interpolated coordinates used for the audio."
-> 
-> 
-
-### Why this is the "Final Level"
-
-By using **LERP** for the path and **Arpeggios** for the movement, the "Market Invention" will finally sound like a real piece of music. The Soprano will "twirl" around the QQQ price line, and the Bass will provide a solid, slower-moving foundation for SPY.
-
-
-To make this work, we need to treat the **One-Second Interval** as a "Musical Bar." Instead of the backend just shouting notes as fast as it can, it will now act as a "Composer" providing a 16-step score for the next second, and the frontend will act as the "Performer" with a high-precision clock.
-
-### 1. The Synthetic "Random Walk" Logic (Backend)
-
-To mimic real stocks, we’ll use a **Geometric Brownian Motion** approximation. This prevents the "price" from just jumping randomly and instead makes it drift realistically.
-
-```python
-import numpy as np
-
-def generate_market_tick(current_price, volatility=0.001, drift=0.0001):
-    """
-    Simulates a realistic 1-second price change.
-    """
-    change_pct = np.random.normal(drift, volatility)
-    return current_price * (1 + change_pct)
-
-```
-
----
-
-### 2. The 16-Step "Baroque" Arpeggio Pattern
-
-This pattern ensures that even if the market is "flat," the harpsichord or organ is playing a sophisticated broken-chord sequence. We will use the **Root (0)**, **Third (2)**, and **Fifth (4)** of the current scale.
-
-**The 16th-note sequence:**
-`[0, 2, 4, 2, 0, 4, 7, 4, 0, 2, 4, 2, 7, 4, 2, 0]`
-
----
-
-### 3. The Precision Sync Strategy (Frontend)
-
-Javascript's `setTimeout` is notorious for drifting. To keep this in sync with a "Realistic Second," we must use the **Tone.js Transport**.
-
-* **BPM Setting:** Set `Tone.Transport.bpm.value = 60`. This makes 1 Beat = 1 Second.
-* **The Look-Ahead:** Every beat, we fetch the next second of data.
-* **The Schedule:** We schedule 16 notes to play at exactly `time`, `time + 0.0625`, `time + 0.125`, etc.
-
----
-
-### 4. Consolidated Cursor Instructions
-
-Copy and paste this into Cursor to implement the "Pro" version of your sync logic:
-
-> "Update the engine to use **Precision 1-Second Look-Ahead Scheduling**:
-> 1. **Backend (`main.py`):** >    - Create a `generate_bundle()` function that calculates a target `end_price` using a random walk.
-> * Create 16 notes by **linearly interpolating (LERP)** from `start_price` to `end_price`.
-> * Apply the arpeggio pattern `[0, 2, 4, 2, 0, 4, 7, 4, 0, 2, 4, 2, 7, 4, 2, 0]` to these 16 notes so they 'spiral' around the price line.
-> * Send this 16-note bundle as a JSON array over the WebSocket once per second.
-> 
-> 
-> 2. **Frontend (`script.js`):**
-> * Set `Tone.Transport.bpm.value = 60`.
-> * Create a `Tone.Loop` that triggers every '1n' (one bar/second).
-> * In the loop, take the 16-note bundle and schedule each note using: `sampler.triggerAttackRelease(note, '16n', time + (i * 0.0625))`.
-> 
-> 
-> 3. **Visualization:**
-> * Update the Canvas so the 'Price Line' connects the 1-second snapshots smoothly.
-> * Ensure the 'Note Beads' appear exactly on the 16th-note grid lines."
-> 
-> 
-> 
-> 
-
-### 5. Updated Requirements (`requirements.md`)
-
-```markdown
-## 19. Precision Temporal Sync
-* **Clock Source:** Tone.Transport (Sample-accurate) set to 60 BPM.
-* **Data Delivery:** 16-note JSON bundles delivered via WebSocket every 1000ms.
-* **Sub-Second Interpolation:** Linear interpolation (LERP) between 1s price snapshots to determine the "Melodic Axis."
-* **Patterning:** 16th-note figurate arpeggios applied to the interpolated axis to ensure continuous melodic movement.
-
-```
+**Would you like me to provide a cleaned-up version of the `_pick_scale_step` function that ignores repeat penalties when the price trend is strong?**
