@@ -177,3 +177,35 @@ The scale and "mood" shift based on the relationship between Price and its Expon
     * Scales must auto-range based on the min/max price currently visible in the sliding window.
 * **Mute/Hide Toggle:** Checkboxes per ticker that toggle both the Tone.js sampler output and the canvas rendering.
 
+
+--- 
+
+## 17. Integrated Market Score Visualization
+* **Price Layer:** A 1-second snapshot line chart for both SPY and QQQ.
+* **Note Layer:** Superimposed 16th-note MIDI blocks.
+* **X-Axis Granularity:** * 1 Second = 1 major grid line (Quarter Note).
+    * 16 Notes per grid line (16th Note resolution).
+* **Dual Y-Axes Scaling:** * Left axis auto-scales to SPY 1-second snapshots.
+    * Right axis auto-scales to QQQ 1-second snapshots.
+* **Visual Hierarchy:** Price lines are semi-transparent; musical notes are high-contrast and opaque.
+
+--- 
+
+## 18. Sub-Second Melodic Fluidity
+* **Path Interpolation:** Notes must follow a linear interpolation (LERP) between 1-second snapshots to avoid "blocky" melodic movement.
+* **Arpeggiation:** If price is flat, the 16th notes should arpeggiate through the active chord (Root-3rd-5th-3rd) rather than repeating the same pitch.
+* **Counterpoint Density:** * Soprano: High density (16th notes).
+    * Bass: Lower density (8th or Quarter notes) to provide a stable harmonic floor.
+
+--- 
+## 19. Precision Temporal Sync
+* **Clock Source:** Tone.Transport (Sample-accurate) set to 60 BPM.
+* **Data Delivery:** 16-note JSON bundles delivered via WebSocket every 1000ms.
+* **Sub-Second Interpolation:** Linear interpolation (LERP) between 1s price snapshots to determine the "Melodic Axis."
+* **Patterning:** 16th-note figurate arpeggios applied to the interpolated axis to ensure continuous melodic movement.
+
+--- 
+## 20. Real-Time Volatility Control
+* **Slider Range:** 0% (Static) to 100% (Extreme Volatility/Market Crash simulation).
+* **Audio Correlation:** High volatility increases the velocity and octave-range of the Sampler notes.
+* **Visual Correlation:** The 'Note Beads' on the canvas should vibrate further away from the central 'Price Line' as volatility increases.

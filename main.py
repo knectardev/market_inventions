@@ -60,6 +60,28 @@ class VoiceLeading:
             return candidates[len(candidates) // 2]
         return min(candidates, key=lambda note: abs(note - prev_note))
 
+    def pick_near_target(
+        self,
+        prev_note: Optional[int],
+        pitch_class: int,
+        target_midi: int,
+        min_midi: int,
+        max_midi: int,
+    ) -> int:
+        candidates = [
+            midi
+            for midi in range(min_midi, max_midi + 1)
+            if midi % 12 == pitch_class
+        ]
+        if not candidates:
+            return prev_note if prev_note is not None else target_midi
+        if prev_note is None:
+            return min(candidates, key=lambda note: abs(note - target_midi))
+        return min(
+            candidates,
+            key=lambda note: abs(note - target_midi) + 0.5 * abs(note - prev_note),
+        )
+
 
 class HarmonicClock:
     """Modulo-16 clock for harmonic progression lookup."""
@@ -84,6 +106,12 @@ class InventionEngine:
         self.root_offset = 0
         self.tick_count = 0
         self.passing_tone_prob = 0.35
+        self.qqq_open = 430.0
+        self.spy_open = 510.0
+        self.qqq_price = self.qqq_open
+        self.spy_price = self.spy_open
+        self.qqq_step_pct = 0.0015
+        self.spy_step_pct = 0.0010
         self.chord_progressions = {
             "MAJOR": [
                 1, 1, 4, 4,
@@ -137,6 +165,16 @@ class InventionEngine:
                 return candidate
         return note
 
+    def _next_price(self, current: float, step: float, drift: float) -> float:
+        noise = self.rng.uniform(-step, step)
+        next_price = current + noise + drift
+        return max(0.01, next_price)
+
+    def _price_to_midi(self, price: float, open_price: float, base_midi: int, step_pct: float) -> int:
+        delta_pct = (price - open_price) / open_price
+        semitones = round(delta_pct / step_pct)
+        return base_midi + semitones
+
     def get_next_notes(self) -> Dict[str, object]:
         self.tick_count += 1
         self.clock.tick()
@@ -169,11 +207,22 @@ class InventionEngine:
         soprano_pitch_class = (root_midi + soprano_degree) % 12
         bass_pitch_class = (root_midi + bass_degree) % 12
 
-        soprano = self.voice_leading.pick_pitch_class(
-            self.prev_soprano, soprano_pitch_class, 60, 84
+        if self.tick_count % 4 == 0:
+            self.qqq_price = self._next_price(self.qqq_price, step=0.6, drift=0.03)
+            self.spy_price = self._next_price(self.spy_price, step=0.45, drift=0.02)
+
+        qqq_anchor_midi = self._price_to_midi(
+            self.qqq_price, self.qqq_open, base_midi=72, step_pct=self.qqq_step_pct
         )
-        bass = self.voice_leading.pick_pitch_class(
-            self.prev_bass, bass_pitch_class, 36, 60
+        spy_anchor_midi = self._price_to_midi(
+            self.spy_price, self.spy_open, base_midi=48, step_pct=self.spy_step_pct
+        )
+
+        soprano = self.voice_leading.pick_near_target(
+            self.prev_soprano, soprano_pitch_class, qqq_anchor_midi, 60, 84
+        )
+        bass = self.voice_leading.pick_near_target(
+            self.prev_bass, bass_pitch_class, spy_anchor_midi, 36, 60
         )
 
         soprano = self._apply_passing_tone(soprano, 60, 84)
@@ -183,6 +232,8 @@ class InventionEngine:
         self.prev_bass = bass
 
         divergence = self._check_divergence(soprano, bass)
+        soprano_offset = soprano - qqq_anchor_midi
+        bass_offset = bass - spy_anchor_midi
         debug_token = self.rng.randint(0, 999)
 
         return {
@@ -195,6 +246,12 @@ class InventionEngine:
             "root_offset": self.root_offset,
             "tick": self.tick_count,
             "debug": debug_token,
+            "qqq_price": round(self.qqq_price, 2),
+            "spy_price": round(self.spy_price, 2),
+            "qqq_anchor_midi": qqq_anchor_midi,
+            "spy_anchor_midi": spy_anchor_midi,
+            "qqq_note_offset": soprano_offset,
+            "spy_note_offset": bass_offset,
         }
 
 
