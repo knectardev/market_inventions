@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-BUILD_ID = "NOTE_OPTIMIZE_V29"
+BUILD_ID = "VARIED_MELODY_V41"
 
 class VoiceLeading:
     """Pick the closest chord tone to the previous note."""
@@ -114,8 +114,8 @@ class InventionEngine:
         self.tick_count = 0
         self.sub_steps = 16
         self.arpeggio_pattern = [0, 2, 4, 2, 7, 4, 2, 0, 0, 2, 4, 2, 7, 4, 2, 0]
-        self.qqq_open = 430.0
-        self.spy_open = 510.0
+        self.qqq_open = self._generate_random_opening_price(350, 550)
+        self.spy_open = self._generate_random_opening_price(450, 600)
         self.qqq_price = self.qqq_open
         self.spy_price = self.spy_open
         self.base_qqq_step_pct = 0.0015
@@ -246,6 +246,26 @@ class InventionEngine:
         """Set soprano rhythm: 4 = quarter notes, 8 = eighth notes, 16 = sixteenth notes"""
         if rhythm in {4, 8, 16}:
             self.soprano_rhythm = rhythm
+
+    def _generate_random_opening_price(self, min_price: float, max_price: float) -> float:
+        """Generate a random opening price within the given range."""
+        return self.rng.uniform(min_price, max_price)
+
+    def reset_session(self) -> None:
+        """Reset the engine state for a new session with fresh random prices."""
+        # Generate wider price ranges so resets are more obvious
+        self.qqq_open = self._generate_random_opening_price(350, 550)
+        self.spy_open = self._generate_random_opening_price(450, 600)
+        self.qqq_price = self.qqq_open
+        self.spy_price = self.spy_open
+        self.tick_count = 0
+        self.prev_soprano = 72
+        self.prev_bass = 48
+        self.soprano_repeat_count = 0
+        self.prev_soprano_base = None
+        self.melody_phase = 0
+        self.clock = HarmonicClock()
+        print(f"🔄 Session reset: QQQ opening at ${self.qqq_open:.2f}, SPY opening at ${self.spy_open:.2f}")
 
     @staticmethod
     def _offset_scale_degree(
@@ -421,18 +441,18 @@ class InventionEngine:
         )
 
         # Soprano range: 12 semitones (1 octave) centered on price anchor
-        # Allow wide center range (54-96) so melody can follow price freely
+        # Keep center in comfortable audible range (66-84 = F#4-C6, ~370-1046 Hz)
         soprano_half_range = 12
-        soprano_center = max(54, min(96, initial_qqq_anchor))
-        soprano_min = max(36, soprano_center - soprano_half_range)
-        soprano_max = min(108, soprano_center + soprano_half_range)
+        soprano_center = max(66, min(84, initial_qqq_anchor))
+        soprano_min = max(60, soprano_center - soprano_half_range)  # Min C4 (~262 Hz)
+        soprano_max = min(96, soprano_center + soprano_half_range)  # Max C6 (~1046 Hz)
 
         # Bass range: 10 semitones centered on price anchor
-        # Allow wider center range for better tracking
+        # Keep center in comfortable audible range (48-60 = C3-C4, ~130-262 Hz)
         bass_half_range = 10
-        bass_center = max(36, min(60, initial_spy_anchor))
-        bass_min = max(24, bass_center - bass_half_range)
-        bass_max = min(72, bass_center + bass_half_range)
+        bass_center = max(48, min(60, initial_spy_anchor))
+        bass_min = max(42, bass_center - bass_half_range)  # Min F#2 (~92 Hz)
+        bass_max = min(72, bass_center + bass_half_range)  # Max C5 (~523 Hz)
 
         soprano_pool = self._get_scale_notes(regime, root_midi, soprano_min, soprano_max)
         bass_pool = self._get_scale_notes(regime, root_midi, bass_min, bass_max)
@@ -453,8 +473,9 @@ class InventionEngine:
             lerp_factor = i / (self.sub_steps - 1)
             qqq_price = start_qqq + (end_qqq - start_qqq) * lerp_factor
             spy_price = start_spy + (end_spy - start_spy) * lerp_factor
-            qqq_price += self.rng.uniform(-0.02, 0.02)
-            spy_price += self.rng.uniform(-0.02, 0.02)
+            # Moderate intra-tick price variation for natural movement
+            qqq_price += self.rng.uniform(-0.08, 0.08)
+            spy_price += self.rng.uniform(-0.06, 0.06)
 
             qqq_prices.append(round(qqq_price, 4))
             spy_prices.append(round(spy_price, 4))
@@ -466,12 +487,16 @@ class InventionEngine:
                 prev_price=prev_qqq_price
             )
             prev_qqq_price = qqq_price
+            
+            # Build chord pool (always available for arpeggiation)
+            chord_pool = [
+                note
+                for note in soprano_pool
+                if (note - root_midi) % 12 in chord_tone_mods
+            ]
+            
+            # On chord beats, prefer chord tones
             if i % 4 == 0:
-                chord_pool = [
-                    note
-                    for note in soprano_pool
-                    if (note - root_midi) % 12 in chord_tone_mods
-                ]
                 allowed_soprano = chord_pool or soprano_pool
             else:
                 allowed_soprano = soprano_pool
@@ -480,77 +505,44 @@ class InventionEngine:
             # FIX: Sensitivity-based repeat penalty (disable at high sensitivity)
             repeat_penalty_value = 0.0 if self.sensitivity >= 5.0 else 0.2
             
-            # Rhythm control: Only generate new soprano notes at rhythm boundaries
+            # Rhythm control: Update anchor note at rhythm boundaries
             rhythm_interval = 16 // self.soprano_rhythm  # 1 for 16th, 2 for 8th, 4 for quarter
             should_update_soprano = (i % rhythm_interval == 0)
             
+            # Soprano generation - STRICT rhythm adherence to prevent overlaps
+            # ONLY update at rhythm boundaries, hold between
             if should_update_soprano:
-                if self.sensitivity >= 4.0:
-                    # HIGH SENSITIVITY: Track price directly within the scale
-                    # Use raw unclamped target so notes respond immediately to price changes
-                    base_soprano = self._nearest_scale_note(qqq_anchor_midi_raw, allowed_soprano)
-
-                    # Stochastic jitter: When price is flat, randomly walk ±1-2 scale degrees
-                    # This prevents visual flatlining while still centering around price
-                    if self.prev_soprano_base is not None and base_soprano == self.prev_soprano_base:
-                        self.soprano_repeat_count += 1
-                    else:
-                        self.soprano_repeat_count = 0
-
-                    self.prev_soprano_base = base_soprano
-
-                    if self.soprano_repeat_count >= 1:
-                        # Brownian motion jitter - random walk around the anchor
-                        jitter_range = min(3, 1 + self.soprano_repeat_count // 2)  # Grows with stagnation
-                        jitter = self.rng.randint(-jitter_range, jitter_range)
-                        # Bias toward movement (avoid 0)
-                        if jitter == 0 and self.soprano_repeat_count >= 2:
-                            jitter = self.rng.choice([-1, 1])
-                        soprano = self._offset_scale_degree(base_soprano, soprano_pool, jitter)
+                # At rhythm boundary: pick note with melodic variation
+                base_soprano = self._nearest_scale_note(qqq_anchor_midi_raw, allowed_soprano)
+                
+                # Add melodic variation to prevent locked patterns
+                # Pick from nearby scale notes (±2 scale degrees) weighted toward the anchor
+                if self.prev_soprano is not None:
+                    # Get notes within ±2 scale degrees
+                    nearby_notes = [
+                        self._offset_scale_degree(base_soprano, soprano_pool, offset)
+                        for offset in [-2, -1, 0, 1, 2]
+                    ]
+                    # Remove duplicates and ensure they're in range
+                    nearby_notes = list(set([n for n in nearby_notes if n in soprano_pool]))
+                    
+                    # Weighted random choice: 50% anchor, 50% neighbors
+                    if nearby_notes and self.rng.random() < 0.5:
+                        # Choose a neighbor note
+                        neighbors = [n for n in nearby_notes if n != base_soprano]
+                        if neighbors:
+                            soprano = self.rng.choice(neighbors)
+                        else:
+                            soprano = base_soprano
                     else:
                         soprano = base_soprano
                 else:
-                    # FIX: Use raw unclamped target to feel price movement immediately
-                    soprano = self._pick_scale_step(
-                        self.prev_soprano,
-                        qqq_anchor_midi_raw,  # Use raw target for responsive tracking
-                        allowed_soprano,
-                        max_degree_step=max(2, soprano_degree_step) if i % 4 == 0 else soprano_degree_step,
-                        repeat_penalty=repeat_penalty_value,  # Adjusted based on sensitivity
-                    )
-                    soprano = self._nearest_scale_note(soprano, soprano_pool)
-                    if i % 2 == 1:
-                        stepped = self._step_toward_target(
-                            self.prev_soprano,
-                            qqq_anchor_midi_raw,  # Use raw target
-                            soprano_pool,
-                            step_degrees=soprano_degree_step,
-                        )
-                        if stepped is not None:
-                            soprano = stepped
-                    soprano = self._enforce_stepwise_motion(
-                        self.prev_soprano, soprano, soprano_pool, min_move=soprano_degree_step
-                    )
-                    if self.prev_soprano is not None and soprano == self.prev_soprano:
-                        self.soprano_repeat_count += 1
-                    else:
-                        self.soprano_repeat_count = 0
-                    if self.soprano_repeat_count >= 2:
-                        forced = self._step_toward_target(
-                            self.prev_soprano,
-                            qqq_anchor_midi_raw,  # Use raw target
-                            soprano_pool,
-                            step_degrees=max(2, soprano_degree_step),
-                        )
-                        if forced is not None:
-                            soprano = forced
-                            self.soprano_repeat_count = 0
-                    if self.soprano_repeat_count >= self.stuck_limit:
-                        direction = 1 if qqq_anchor_midi_raw >= (self.prev_soprano or soprano) else -1
-                        soprano = self._escape_stuck(soprano, soprano_pool, direction)
-                        self.soprano_repeat_count = 0
+                    soprano = base_soprano
+                
+                self.prev_soprano = soprano
             else:
-                # Hold the previous soprano note between rhythm boundaries
+                # Between rhythm boundaries: hold the previous note
+                # This GUARANTEES no overlaps
                 soprano = self.prev_soprano if self.prev_soprano is not None else 72
 
             # BASS LOGIC: Quarter-note rhythm with stochastic jitter
@@ -562,8 +554,9 @@ class InventionEngine:
             )
             prev_spy_price = spy_price
 
+            # Bass generation - STRICT quarter notes only to prevent overlaps
             if i % 4 == 0:
-                # Quarter beat - pick a new bass note using instantaneous LERP'd price
+                # Quarter beat ONLY: pick new bass from price with variation
                 chord_bass_pool = [
                     note
                     for note in bass_pool
@@ -571,18 +564,24 @@ class InventionEngine:
                 ]
                 allowed_bass = chord_bass_pool or bass_pool
                 base_bass = self._nearest_scale_note(spy_anchor_midi, allowed_bass)
-
-                # Stochastic jitter for bass when note would repeat
-                if self.prev_bass is not None and base_bass == self.prev_bass:
-                    # Random walk ±1-2 scale degrees to prevent stagnation
-                    jitter = self.rng.choice([-2, -1, 1, 2])
-                    bass_note = self._offset_scale_degree(base_bass, bass_pool, jitter)
+                
+                # Add melodic variation for walking bass line
+                # 40% chance to pick a nearby chord tone or scale degree
+                if self.prev_bass is not None and len(chord_bass_pool) > 1 and self.rng.random() < 0.4:
+                    # Get nearby chord tones (within 7 semitones)
+                    nearby_chords = [n for n in chord_bass_pool if abs(n - base_bass) <= 7 and n != base_bass]
+                    if nearby_chords:
+                        # Pick one that creates stepwise motion from previous bass
+                        bass_note = min(nearby_chords, key=lambda n: abs(n - self.prev_bass))
+                    else:
+                        bass_note = base_bass
                 else:
                     bass_note = base_bass
-
+                
                 self.prev_bass = bass_note
             else:
-                # Hold the previous bass note for the rest of the quarter-beat
+                # Between quarter beats: hold the previous note
+                # This GUARANTEES no overlaps
                 bass_note = self.prev_bass
 
             # Calculate visual price: offset from the dynamic range center
@@ -673,15 +672,30 @@ async def update_config(payload: Dict[str, float]) -> Dict[str, object]:
     }
 
 
+@app.post("/reset")
+async def reset_session() -> Dict[str, object]:
+    """Reset engine state with fresh random prices."""
+    engine.reset_session()
+    return {
+        "status": "reset",
+        "qqq_open": round(engine.qqq_open, 2),
+        "spy_open": round(engine.spy_open, 2),
+    }
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
+    # Reset engine state for fresh random prices on each new connection
+    print("🔌 New WebSocket connection - resetting session...")
+    engine.reset_session()
     try:
         while True:
             data = engine.generate_one_second_bundle()
             await websocket.send_text(json.dumps(data))
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
+        print("🔌 WebSocket disconnected")
         return
 
 

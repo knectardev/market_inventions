@@ -370,11 +370,8 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
   const baseTime = baseEventTimeMs ?? performance.now();
   let prevSopranoMidi = null;
   let prevBassMidi = null;
-  
-  // Get rhythm setting to determine note duration
-  const sopranoRhythm = Number(sopranoRhythmSelect?.value ?? 16);
-  const sopranoDurationUnits = 16 / sopranoRhythm; // 4 for quarter, 2 for eighth, 1 for sixteenth
-  const bassDurationUnits = 4; // Bass always plays quarter notes
+  let sopranoStartIndex = -1;
+  let bassStartIndex = -1;
   
   for (let i = 0; i < bundle.soprano_bundle.length; i += 1) {
     const offsetSeconds = i * SUB_STEP_SECONDS;
@@ -382,8 +379,18 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
     const tick = (bundle.start_tick ?? 0) + i;
 
     const sopranoMidi = bundle.soprano_bundle[i];
-    // Only add visual note when the pitch changes (matching audio behavior)
+    // When soprano note changes, calculate duration until next change
     if (sopranoMidi !== null && sopranoMidi !== undefined && sopranoMidi !== prevSopranoMidi) {
+      // If there was a previous note, we now know its actual duration
+      if (prevSopranoMidi !== null && sopranoStartIndex >= 0) {
+        const duration = i - sopranoStartIndex;
+        // Update the last added soprano note with correct duration
+        const lastSopranoNote = noteEvents.filter(e => e.voice === "soprano").pop();
+        if (lastSopranoNote) {
+          lastSopranoNote.durationUnits = duration;
+        }
+      }
+      
       const sopranoPrice = bundle.qqq_note_prices[i];
       addNoteEvent(
         sopranoMidi,
@@ -392,15 +399,26 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
         tick,
         0,
         eventTime,
-        sopranoDurationUnits
+        1  // Start with 1 unit, will be updated when note changes
       );
       prevSopranoMidi = sopranoMidi;
+      sopranoStartIndex = i;
     }
 
     if (Array.isArray(bundle.bass_bundle)) {
       const bassMidi = bundle.bass_bundle[i];
-      // Only add visual note when the pitch changes (matching audio behavior)
+      // When bass note changes, calculate duration until next change
       if (bassMidi !== null && bassMidi !== undefined && bassMidi !== prevBassMidi) {
+        // If there was a previous note, we now know its actual duration
+        if (prevBassMidi !== null && bassStartIndex >= 0) {
+          const duration = i - bassStartIndex;
+          // Update the last added bass note with correct duration
+          const lastBassNote = noteEvents.filter(e => e.voice === "bass").pop();
+          if (lastBassNote) {
+            lastBassNote.durationUnits = duration;
+          }
+        }
+        
         const bassPrice = bundle.spy_note_prices[i];
         addNoteEvent(
           bassMidi,
@@ -409,9 +427,10 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
           tick,
           0,
           eventTime,
-          bassDurationUnits
+          1  // Start with 1 unit, will be updated when note changes
         );
         prevBassMidi = bassMidi;
+        bassStartIndex = i;
       }
     }
 
@@ -422,6 +441,22 @@ const addVisualBundle = (bundle, baseEventTimeMs) => {
       if (bundle.spy_prices[i] !== undefined) {
         addAnchor("bass", bundle.spy_prices[i], tick, eventTime);
       }
+    }
+  }
+  
+  // Handle the last notes in the bundle - extend to end of bundle
+  if (sopranoStartIndex >= 0) {
+    const duration = bundle.soprano_bundle.length - sopranoStartIndex;
+    const lastSopranoNote = noteEvents.filter(e => e.voice === "soprano").pop();
+    if (lastSopranoNote) {
+      lastSopranoNote.durationUnits = duration;
+    }
+  }
+  if (bassStartIndex >= 0) {
+    const duration = bundle.bass_bundle.length - bassStartIndex;
+    const lastBassNote = noteEvents.filter(e => e.voice === "bass").pop();
+    if (lastBassNote) {
+      lastBassNote.durationUnits = duration;
     }
   }
 };
@@ -922,6 +957,16 @@ const startPlayback = async () => {
   const loadToken = (loadCounter += 1);
   const shouldReconnect = !isPlaying;
   setButtonState("Loading Samples...", true);
+
+  // Reset engine state for fresh random prices on each playback start
+  if (shouldReconnect) {
+    try {
+      await fetch("/reset", { method: "POST" });
+      logLine("Engine reset - fresh random prices generated");
+    } catch (error) {
+      logLine(`Reset warning: ${error.message}`);
+    }
+  }
 
   try {
     const [qqqSampler, spySampler] = await Promise.all([
