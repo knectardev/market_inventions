@@ -24,7 +24,9 @@ const buildRuntimeEl = document.getElementById("build-runtime");
 const qqqPriceEl = document.getElementById("qqq-price");
 const spyPriceEl = document.getElementById("spy-price");
 
-let socket = null;
+// Separate WebSockets for architectural decoupling
+let priceSocket = null;  // Always connected - streams price data only
+let musicSocket = null;  // Connected only when audio is playing
 let sopranoSampler = null;
 let bassSampler = null;
 let isPlaying = false;
@@ -532,11 +534,12 @@ const drawVisualizer = () => {
   const spyMax = spyPrices.length ? Math.max(...spyPrices) : 520;
 
   const lanePadding = 16;
+  const bottomAxisReserve = 56; // Reserve space for X-axis time labels and bottom border
   const mid = height / 2;
   const qqqTop = lanePadding;
   const qqqBottom = mid - lanePadding;
   const spyTop = mid + lanePadding;
-  const spyBottom = height - lanePadding;
+  const spyBottom = height - bottomAxisReserve;
 
   drawPriceLine(
     qqqAnchors,
@@ -561,15 +564,13 @@ const drawVisualizer = () => {
     if (x < -20 || x > width + 20) {
       continue;
     }
-    // Draw notes at PRICE position so they track the price line visually
-    // The grey connectors are no longer needed since notes follow price directly
-    const y = event.price
-      ? (event.voice === "soprano"
-          ? scaleY(event.price, qqqMin, qqqMax, qqqTop, qqqBottom)
-          : scaleY(event.price, spyMin, spyMax, spyTop, spyBottom))
-      : (event.voice === "soprano"
-          ? scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, qqqTop, qqqBottom)
-          : scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, spyTop, spyBottom));
+    
+    // CRITICAL: Notes MUST be positioned by MIDI pitch for musical consistency
+    // Same pitch = same vertical position (fundamental music notation principle)
+    // Each voice (soprano/bass) has its own lane
+    const y = event.voice === "soprano"
+      ? scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, qqqTop, qqqBottom)
+      : scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, spyTop, spyBottom);
     
     const color =
       event.voice === "soprano"
@@ -593,7 +594,6 @@ const drawVisualizer = () => {
       canvasCtx.textBaseline = "top";
       canvasCtx.fillText(midiToNoteName(event.midi), x + noteWidth / 2, y + 6);
     }
-    // Connector lines removed - notes now directly track price position
   }
 
   canvasCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
@@ -602,27 +602,176 @@ const drawVisualizer = () => {
   canvasCtx.lineTo(width, mid);
   canvasCtx.stroke();
 
-  canvasCtx.fillStyle = "rgba(255, 255, 255, 0.6)";
-  canvasCtx.font = "12px ui-monospace, SFMono-Regular, Menlo, monospace";
-  canvasCtx.textAlign = "left";
-  canvasCtx.fillText(`SPY ${spyMin.toFixed(2)}`, 8, spyBottom - 4);
-  canvasCtx.fillText(`SPY ${spyMax.toFixed(2)}`, 8, spyTop + 12);
-  canvasCtx.textAlign = "right";
-  canvasCtx.fillText(`QQQ ${qqqMin.toFixed(2)}`, width - 8, qqqBottom - 4);
-  canvasCtx.fillText(`QQQ ${qqqMax.toFixed(2)}`, width - 8, qqqTop + 12);
+  // Y-axis price labels - Color-coded with graduated increments
+  canvasCtx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  
+  // Helper to round to "nice" increment values
+  const getNiceIncrement = (rawIncrement) => {
+    // Nice values: 0.01, 0.02, 0.025, 0.05, 0.10, 0.20, 0.25, 0.50, 1.0, 2.0, 2.5, 5.0, 10.0, etc.
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawIncrement)));
+    const normalized = rawIncrement / magnitude;
+    
+    let nice;
+    if (normalized < 1.5) {
+      nice = 1;
+    } else if (normalized < 2.25) {
+      nice = 2;
+    } else if (normalized < 3.5) {
+      nice = 2.5;
+    } else if (normalized < 7.5) {
+      nice = 5;
+    } else {
+      nice = 10;
+    }
+    
+    return nice * magnitude;
+  };
+  
+  // Helper function to draw graduated price labels with constant pixel spacing
+  const drawPriceLabels = (min, max, top, bottom, color, side, ticker) => {
+    canvasCtx.fillStyle = color;
+    canvasCtx.textAlign = side;
+    
+    // Calculate available vertical space and target spacing
+    const verticalHeight = Math.abs(bottom - top);
+    const targetSpacing = 40; // Target 40px between labels
+    const maxLabels = Math.floor(verticalHeight / targetSpacing);
+    
+    // If range is too small, just show min and max prices
+    if (maxLabels < 2) {
+      const xPos = side === "left" ? 8 : width - 8;
+      canvasCtx.fillText(min.toFixed(2), xPos, bottom - 4);
+      canvasCtx.fillText(max.toFixed(2), xPos, top + 12);
+      return;
+    }
+    
+    // Calculate raw increment and round to nice value
+    const range = max - min;
+    const rawIncrement = range / (maxLabels - 1);
+    const increment = getNiceIncrement(rawIncrement);
+    
+    // Round min/max to nearest increment for clean labels
+    const startPrice = Math.floor(min / increment) * increment;
+    const endPrice = Math.ceil(max / increment) * increment;
+    
+    // Draw price labels at each increment (no ticker on individual labels)
+    for (let price = startPrice; price <= endPrice; price += increment) {
+      if (price < min - increment * 0.1 || price > max + increment * 0.1) continue;
+      
+      const y = scaleY(price, min, max, top, bottom);
+      const xPos = side === "left" ? 8 : width - 8;
+      
+      canvasCtx.fillText(price.toFixed(2), xPos, y + 4);
+    }
+    
+    // Draw fixed ticker label at top of range (above all price labels)
+    canvasCtx.font = "bold 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    const tickerXPos = side === "left" ? 8 : width - 8;
+    canvasCtx.fillText(ticker, tickerXPos, top - 6);
+    canvasCtx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  };
+  
+  // Helper function to draw current price highlight with dotted line
+  const drawCurrentPriceHighlight = (currentPrice, min, max, top, bottom, color, side, ticker) => {
+    if (!currentPrice || currentPrice < min || currentPrice > max) return;
+    
+    const y = scaleY(currentPrice, min, max, top, bottom);
+    const labelWidth = 60;
+    const labelHeight = 18;
+    const padding = 4;
+    
+    // Clamp label Y position to stay within visible bounds
+    const labelY = Math.max(top + labelHeight / 2, Math.min(bottom - labelHeight / 2, y));
+    
+    // Draw dotted horizontal line from edge to playhead (at actual price level)
+    const lineStart = side === "left" ? labelWidth + 8 : width - labelWidth - 8;
+    const lineEnd = playheadX;
+    
+    canvasCtx.strokeStyle = color;
+    canvasCtx.setLineDash([4, 4]);
+    canvasCtx.lineWidth = 1;
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(lineStart, y); // Line at actual price
+    canvasCtx.lineTo(lineEnd, y);
+    canvasCtx.stroke();
+    canvasCtx.setLineDash([]);
+    
+    // Draw background box for current price label (clamped position)
+    const boxX = side === "left" ? 8 : width - labelWidth - 8;
+    canvasCtx.fillStyle = color;
+    canvasCtx.fillRect(boxX, labelY - labelHeight / 2, labelWidth, labelHeight);
+    
+    // Draw price text in dark color on colored background
+    canvasCtx.fillStyle = "#0a0b0d";
+    canvasCtx.font = "bold 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    canvasCtx.textAlign = "center";
+    canvasCtx.fillText(currentPrice.toFixed(2), boxX + labelWidth / 2, labelY + 4);
+    canvasCtx.textAlign = side;
+  };
+  
+  // SPY labels (right side) - Blue to match SPY line
+  drawPriceLabels(spyMin, spyMax, spyTop, spyBottom, noteConfig.bassColor, "right", "SPY");
+  
+  // QQQ labels (right side) - Green/Cyan to match QQQ line
+  drawPriceLabels(qqqMin, qqqMax, qqqTop, qqqBottom, noteConfig.sopranoColor, "right", "QQQ");
+  
+  // Draw current price highlights (needs access to current prices from data)
+  // Extract current prices from most recent anchor or event
+  const latestQqqAnchor = qqqAnchors[qqqAnchors.length - 1];
+  const latestSpyAnchor = spyAnchors[spyAnchors.length - 1];
+  
+  if (latestQqqAnchor) {
+    drawCurrentPriceHighlight(latestQqqAnchor.price, qqqMin, qqqMax, qqqTop, qqqBottom, noteConfig.sopranoColor, "right", "QQQ");
+  }
+  
+  if (latestSpyAnchor) {
+    drawCurrentPriceHighlight(latestSpyAnchor.price, spyMin, spyMax, spyTop, spyBottom, noteConfig.bassColor, "right", "SPY");
+  }
 
-  const labelEvents = qqqAnchors.filter(
-    (event) => event.tick && event.tick % 16 === 0
-  );
+  // X-axis time labels - Real clock time with playhead at current time
+  // DECOUPLED from data/anchors - purely time-based
   canvasCtx.textAlign = "center";
-  for (const event of labelEvents) {
-    const secondsFromNow = (event.time - now) / 1000;
-    const x = playheadX + secondsFromNow * noteConfig.pixelsPerSecond;
+  canvasCtx.textBaseline = "bottom"; // Align text above the Y position
+  canvasCtx.fillStyle = "rgba(255, 255, 255, 0.7)";
+  canvasCtx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  
+  const visibleTimeRange = width / noteConfig.pixelsPerSecond; // seconds visible on screen
+  const labelIntervalSeconds = 1; // Label every 1 second
+  
+  // Current time at playhead
+  const currentTime = new Date();
+  
+  // Draw labels from past (left) to future (right) relative to playhead
+  const startSeconds = Math.floor(-playheadX / noteConfig.pixelsPerSecond);
+  const endSeconds = Math.ceil(visibleTimeRange + Math.abs(startSeconds));
+  
+  const xAxisY = height - 18; // Position with padding below the labels
+  
+  for (let sec = startSeconds; sec <= endSeconds; sec += labelIntervalSeconds) {
+    const x = playheadX + (sec * noteConfig.pixelsPerSecond);
     if (x < 0 || x > width) {
       continue;
     }
-    const seconds = Math.floor(event.tick / 16);
-    canvasCtx.fillText(`${seconds}s`, x, height - 6);
+    
+    // Calculate time offset from current time
+    const timeAtPosition = new Date(currentTime.getTime() + (sec * 1000));
+    
+    // Format as HH:MM:SS
+    const hours = String(timeAtPosition.getHours()).padStart(2, '0');
+    const minutes = String(timeAtPosition.getMinutes()).padStart(2, '0');
+    const seconds = String(timeAtPosition.getSeconds()).padStart(2, '0');
+    const timeLabel = `${hours}:${minutes}:${seconds}`;
+    
+    // Highlight current time at playhead
+    if (sec === 0) {
+      canvasCtx.fillStyle = "rgba(0, 255, 153, 0.9)";
+      canvasCtx.font = "bold 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+      canvasCtx.fillText(timeLabel, x, xAxisY);
+      canvasCtx.fillStyle = "rgba(255, 255, 255, 0.7)";
+      canvasCtx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    } else {
+      canvasCtx.fillText(timeLabel, x, xAxisY);
+    }
   }
 
   canvasCtx.strokeStyle = divergenceActive
@@ -643,25 +792,69 @@ const drawVisualizer = () => {
   requestAnimationFrame(drawVisualizer);
 };
 
-const connectSocket = () => {
-  if (socket) {
-    socket.close();
+const connectPriceSocket = () => {
+  if (priceSocket) {
+    priceSocket.close();
   }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+  priceSocket = new WebSocket(`${protocol}://${window.location.host}/ws/prices`);
 
-  socket.addEventListener("open", () => {
-    updateStatus("Connected");
-    logLine("WebSocket connected");
+  priceSocket.addEventListener("open", () => {
+    updateStatus("Price Stream Active");
+    logLine("📊 Price stream connected");
   });
 
-  socket.addEventListener("close", () => {
-    updateStatus("Disconnected");
-    logLine("WebSocket disconnected");
+  priceSocket.addEventListener("close", () => {
+    logLine("📊 Price stream disconnected - reconnecting...");
+    // Auto-reconnect price stream
+    setTimeout(connectPriceSocket, 2000);
   });
 
-  socket.addEventListener("message", (event) => {
+  priceSocket.addEventListener("message", (event) => {
+    const data = JSON.parse(event.data);
+    const { qqq_prices, spy_prices, qqq_current, spy_current } = data;
+
+    // Update price displays
+    if (qqq_current) qqqPriceEl.textContent = `$${qqq_current}`;
+    if (spy_current) spyPriceEl.textContent = `$${spy_current}`;
+
+    // Add price anchors for visualization ONLY when music is NOT playing
+    // When music IS playing, musicSocket handles ALL visualization through addVisualBundle
+    if (!isPlaying && Array.isArray(qqq_prices) && qqq_prices.length > 0) {
+      const now = performance.now();
+      for (let i = 0; i < qqq_prices.length; i++) {
+        if (i % SUB_STEP_COUNT === 0) {
+          const offsetSeconds = i * SUB_STEP_SECONDS;
+          const eventTime = now + offsetSeconds * 1000;
+          const fakeTick = Math.floor(now / (SUB_STEP_SECONDS * 1000)) + i;
+          
+          if (qqq_prices[i]) addAnchor("soprano", qqq_prices[i], fakeTick, eventTime);
+          if (spy_prices && spy_prices[i]) addAnchor("bass", spy_prices[i], fakeTick, eventTime);
+        }
+      }
+    }
+  });
+};
+
+const connectMusicSocket = () => {
+  if (musicSocket) {
+    musicSocket.close();
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  musicSocket = new WebSocket(`${protocol}://${window.location.host}/ws/music`);
+
+  musicSocket.addEventListener("open", () => {
+    updateStatus("Music Connected");
+    logLine("🎵 Music stream connected");
+  });
+
+  musicSocket.addEventListener("close", () => {
+    logLine("🎵 Music stream disconnected");
+  });
+
+  musicSocket.addEventListener("message", (event) => {
     const data = JSON.parse(event.data);
     const {
       soprano_midi,
@@ -901,9 +1094,10 @@ const stopPlayback = () => {
   }
   Tone.Transport.stop();
   Tone.Transport.cancel();
-  if (socket) {
-    socket.close();
-    socket = null;
+  // Only close MUSIC socket - price socket keeps running
+  if (musicSocket) {
+    musicSocket.close();
+    musicSocket = null;
   }
   if (sopranoSampler) {
     sopranoSampler.releaseAll?.();
@@ -916,7 +1110,7 @@ const stopPlayback = () => {
     bassSampler = null;
   }
   setButtonState("Start Audio", false);
-  updateStatus("Disconnected");
+  updateStatus("Price Stream Active");  // Not "Disconnected" - prices still streaming
 };
 
 const loadSampler = async (instrumentKey) => {
@@ -998,7 +1192,7 @@ const startPlayback = async () => {
   isPlaying = true;
 
   if (shouldReconnect) {
-    connectSocket();
+    connectMusicSocket();
   }
   if (!transportLoop) {
     Tone.Transport.bpm.value = 60;
@@ -1025,7 +1219,7 @@ startButton.addEventListener("click", async () => {
   await startPlayback();
 });
 
-updateStatus("Disconnected");
+updateStatus("Connecting Price Stream...");
 if (sensitivitySlider) {
   updateSensitivityDisplay(sensitivitySlider.value);
   sensitivitySlider.addEventListener("input", (event) => {
@@ -1056,6 +1250,10 @@ if (sopranoRhythmSelect) {
     setConfig(sensitivitySlider?.value ?? 1.0, priceNoiseSlider?.value ?? 1.0, event.target.value);
   });
 }
+// Connect price stream immediately on page load
+// This runs independently of audio/music
+connectPriceSocket();
+
 fetchBuildId();
 resizeCanvas();
 window.addEventListener("resize", resizeCanvas);

@@ -4,6 +4,65 @@ Here is your **Market Inventions** requirements document, properly reformatted w
 
 # Project: Bach Market Invention Engine (BMIE)
 
+## 0. CRITICAL ARCHITECTURAL PRINCIPLE
+
+**⚠️ MANDATORY SEPARATION OF CONCERNS ⚠️**
+
+The system MUST maintain complete decoupling between:
+
+### **Price Data Layer** (Primary)
+- **Purpose**: Generate and stream market price data (QQQ, SPY)
+- **Independence**: Runs continuously from page load, REGARDLESS of audio state
+- **Visibility**: Price lines MUST display immediately on page load without any user interaction
+- **Stream**: WebSocket streams price data continuously, whether music is playing or not
+
+### **Music Generation Layer** (Secondary)
+- **Purpose**: Consume price data and generate musical notes/MIDI
+- **Dependency**: Reads from the Price Data Layer as input
+- **User Control**: Only activates when user clicks "Start Audio"
+- **Independence**: Can be stopped/started without affecting price data stream
+
+**RULE**: Price generation code MUST NEVER be inside or dependent on music generation code. Price data is the source of truth. Music is an optional interpretation layer.
+
+**Test**: Opening the web page should immediately show continuously updating price lines, even if "Start Audio" is never clicked.
+
+---
+
+## 0B. CRITICAL MUSICAL NOTATION PRINCIPLE
+
+**⚠️ MANDATORY: CONSISTENT NOTE POSITIONING ⚠️**
+
+### **Musical Pitch Consistency (Non-Negotiable)**
+
+In standard music notation, **vertical position = pitch**. This principle MUST be maintained:
+
+- **Same MIDI Note = Same Vertical Position**: A C7 (MIDI 96) must ALWAYS appear at the exact same Y coordinate, regardless of when it occurs or what the price was
+- **Higher Pitch = Higher Position**: MIDI 97 must be above MIDI 96, which must be above MIDI 95, etc.
+- **Voice Lanes**: Each voice (Soprano/Bass) has its own vertical lane, but within each lane, pitch consistency is absolute
+
+### **Implementation Rule**
+
+Notes MUST be positioned based on their **MIDI pitch value**, NOT their associated price:
+
+```javascript
+// CORRECT: Position by MIDI pitch
+const y = scaleY(event.midi, noteMin, noteMax, laneTop, laneBottom);
+
+// WRONG: Position by price (breaks musical consistency)
+const y = scaleY(event.price, priceMin, priceMax, laneTop, laneBottom);
+```
+
+### **Why This Matters**
+
+1. **Musical Readability**: Musicians must be able to "read" the notation
+2. **Pattern Recognition**: Melodic patterns become visually recognizable
+3. **Educational Value**: The visualization teaches music theory
+4. **Professional Standard**: Matches all music notation software
+
+**Test**: Play the same note (e.g., C7) multiple times. All instances must align vertically at identical Y coordinates.
+
+---
+
 ## 1. Project Overview
 
 An algorithmic sonification engine that transforms real-time market data (SPY & QQQ) into a two-part Baroque-style counterpoint (Invention). The system maps market volatility, price trends, and asset correlation to musical regimes, harmonic progressions, and dynamic tempo.
