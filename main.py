@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-BUILD_ID = "VISUALIZER_PADDING_V70"
+BUILD_ID = "NOTE_HIGHLIGHT_V71"
 
 class VoiceLeading:
     """Pick the closest chord tone to the previous note."""

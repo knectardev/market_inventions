@@ -238,13 +238,19 @@ const formatRootOffset = (rootOffset) => {
 };
 
 const addNoteEvent = (midi, voice, price, tick, offset, eventTime, durationUnits = 1) => {
+  const startTime = eventTime ?? performance.now();
+  // Calculate end time based on duration (durationUnits * 62.5ms per 16th note at base tempo)
+  const durationMs = durationUnits * SUB_STEP_SECONDS * 1000;
+  const endTime = startTime + durationMs;
+  
   noteEvents.push({
     midi,
     voice,
     price,
     tick,
     offset,
-    time: eventTime ?? performance.now(),
+    time: startTime,
+    endTime, // When this note stops playing
     durationUnits, // How many 16th-note units this note lasts (1, 2, or 4)
   });
   if (noteEvents.length > 400) {
@@ -572,17 +578,42 @@ const drawVisualizer = () => {
       ? scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, qqqTop, qqqBottom)
       : scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, spyTop, spyBottom);
     
-    const color =
+    // Check if note is currently playing (for highlight effect)
+    const isPlaying = event.endTime && now >= event.time && now <= event.endTime;
+    
+    const baseColor =
       event.voice === "soprano"
         ? noteConfig.sopranoColor
         : noteConfig.bassColor;
-    canvasCtx.fillStyle = color;
+    
+    // Highlight playing notes with brighter color and glow
+    if (isPlaying) {
+      canvasCtx.fillStyle = event.voice === "soprano"
+        ? "rgba(124, 255, 194, 1.0)" // Full opacity green
+        : "rgba(122, 167, 255, 1.0)"; // Full opacity blue
+      
+      // Add glow effect
+      canvasCtx.shadowColor = event.voice === "soprano"
+        ? "rgba(124, 255, 194, 0.8)"
+        : "rgba(122, 167, 255, 0.8)";
+      canvasCtx.shadowBlur = 12;
+    } else {
+      canvasCtx.fillStyle = baseColor;
+      canvasCtx.shadowBlur = 0;
+    }
     
     // Calculate width based on note duration (1, 2, or 4 units)
     // One 16th note unit = pixelsPerSecond / 16
     const durationUnits = event.durationUnits ?? 1;
     const noteWidth = (noteConfig.pixelsPerSecond / 16) * durationUnits;
-    canvasCtx.fillRect(x, y - 3, noteWidth, 6);
+    
+    // Draw note with larger height if playing
+    const noteHeight = isPlaying ? 8 : 6;
+    const noteYOffset = isPlaying ? 4 : 3;
+    canvasCtx.fillRect(x, y - noteYOffset, noteWidth, noteHeight);
+    
+    // Reset shadow
+    canvasCtx.shadowBlur = 0;
 
     if (toggleNoteLabels?.checked) {
       canvasCtx.fillStyle =
