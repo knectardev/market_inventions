@@ -566,6 +566,13 @@ const drawVisualizer = () => {
 
   for (const event of visibleEvents) {
     const secondsFromNow = (event.time - now) / 1000;
+    
+    // Only show notes that are within 0.25 seconds of playing (just-in-time display)
+    // This creates a smooth appearance as notes emerge right before playing
+    if (secondsFromNow > 0.25) {
+      continue;
+    }
+    
     const x = playheadX + secondsFromNow * noteConfig.pixelsPerSecond;
     if (x < -20 || x > width + 20) {
       continue;
@@ -594,8 +601,8 @@ const drawVisualizer = () => {
       
       // Add glow effect
       canvasCtx.shadowColor = event.voice === "soprano"
-        ? "rgba(124, 255, 194, 0.8)"
-        : "rgba(122, 167, 255, 0.8)";
+        ? "rgba(231, 10, 10, 0.8)"
+        : "rgba(255, 0, 0, 0.8)";
       canvasCtx.shadowBlur = 12;
     } else {
       canvasCtx.fillStyle = baseColor;
