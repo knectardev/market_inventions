@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-BUILD_ID = "INVERTED_SENSITIVITY_FIX_V81"
+BUILD_ID = "MINOR_FIX_V90"
 
 class VoiceLeading:
     """Pick the closest chord tone to the previous note."""
@@ -90,10 +90,16 @@ class HarmonicClock:
 
     def __init__(self) -> None:
         self.step = 0
+        self.progression_step = 0  # Advances once per bundle for chord progression
 
     def tick(self) -> int:
         self.step = (self.step + 1) % 16
         return self.step
+
+    def advance_progression(self) -> int:
+        """Advance the chord progression by one step (call once per bundle)."""
+        self.progression_step = (self.progression_step + 1) % 16
+        return self.progression_step
 
 
 class InventionEngine:
@@ -120,10 +126,10 @@ class InventionEngine:
         self.spy_price = self.spy_open
         self.base_qqq_step_pct = 0.0015
         self.base_spy_step_pct = 0.0010
-        self.sensitivity = 1.0
+        self.sensitivity = 0.7
         self.qqq_step_pct = self.base_qqq_step_pct
         self.spy_step_pct = self.base_spy_step_pct
-        self.price_noise_multiplier = 1.0
+        self.price_noise_multiplier = 6.7
         self.chord_progressions = {
             "MAJOR": [
                 1, 1, 4, 4,
@@ -138,20 +144,37 @@ class InventionEngine:
                 5, 5, 1, 1,
             ],
         }
-        self.chord_map = {
-            1: [0, 4, 7],
-            2: [2, 5, 9],
-            3: [4, 7, 11],
-            4: [5, 9, 12],
-            5: [7, 11, 14],
-            6: [9, 12, 16],
-            7: [11, 14, 17],
+        # Major chord map: I=major, ii=minor, iii=minor, IV=major, V=major, vi=minor, vii°=dim
+        self.chord_map_major = {
+            1: [0, 4, 7],    # I   - major
+            2: [2, 5, 9],    # ii  - minor
+            3: [4, 7, 11],   # iii - minor
+            4: [5, 9, 12],   # IV  - major
+            5: [7, 11, 14],  # V   - major
+            6: [9, 12, 16],  # vi  - minor
+            7: [11, 14, 17], # vii°- diminished
         }
+        # Minor chord map: i=minor, ii°=dim, III=major, iv=minor, v=minor, VI=major, VII=major
+        self.chord_map_minor = {
+            1: [0, 3, 7],    # i   - minor (flat 3rd!)
+            2: [2, 5, 8],    # ii° - diminished
+            3: [3, 7, 10],   # III - major
+            4: [5, 8, 12],   # iv  - minor
+            5: [7, 10, 14],  # v   - minor (natural minor) or [7, 11, 14] for harmonic minor
+            6: [8, 12, 15],  # VI  - major
+            7: [10, 14, 17], # VII - major
+        }
+        self.chord_map = self.chord_map_major  # Default for backward compat
         self.allowed_degrees = list(self.chord_map.keys())
         self.max_root_offset = 0
         self.last_degree = 1
         self.root_degree_index = 0
-        self.lock_regime = "MAJOR"
+        self.lock_regime = None  # No longer locked - regime is dynamic based on price trend
+        self.current_regime = "MAJOR"  # Current dynamic regime
+        self.consecutive_down_bars = 0  # Count of consecutive price-down bars
+        self.consecutive_up_bars = 0  # Count of consecutive price-up bars
+        self.prev_bar_price = None  # Previous bar's ending price for trend detection
+        self.regime_switch_threshold = 3  # Bars of trend to switch regime
         self.enable_root_offset_motion = False
         self.fixed_root_midi = 60
         self.soprano_repeat_count = 0
@@ -159,13 +182,53 @@ class InventionEngine:
         self.melody_phase = 0
         self.stuck_limit = 8
         self.prev_soprano_base: Optional[int] = None  # Track price-derived anchor before offset
-        self.soprano_rhythm = 16  # 4 = quarter notes, 8 = eighth notes, 16 = sixteenth notes
+        self.soprano_rhythm = 8  # 4 = quarter notes, 8 = eighth notes, 16 = sixteenth notes
+        self.bass_rhythm = 2  # 4 = quarter notes, 2 = half notes, 1 = whole notes
+        self.bass_sensitivity_multiplier = 0.5  # Bass needs wider price moves to justify a leap
+        self.trend_cycle_seconds = 40  # Duration of full bull/bear cycle in seconds
+        self.prev_spy_direction = 0  # Track SPY trend for walking bass: -1=down, 0=flat, 1=up
+        self.chord_names = {
+            1: "I", 2: "ii", 3: "iii", 4: "IV", 5: "V", 6: "vi", 7: "vii°"
+        }
+        self.minor_chord_names = {
+            1: "i", 2: "ii°", 3: "III", 4: "iv", 5: "V", 6: "VI", 7: "vii°"
+        }
 
     def _current_regime(self) -> str:
         if self.lock_regime:
             return self.lock_regime
-        # Placeholder until market-regime logic is wired
-        return "MAJOR" if self.clock.step < 8 else "MINOR"
+        # Dynamic regime based on price trend
+        return self.current_regime
+
+    def _update_regime_from_price(self, current_price: float) -> None:
+        """
+        Update regime based on price trend with symmetric hysteresis:
+        - Switch to MINOR after regime_switch_threshold consecutive down bars
+        - Switch to MAJOR after regime_switch_threshold consecutive up bars
+        """
+        if self.prev_bar_price is None:
+            self.prev_bar_price = current_price
+            return
+        
+        if current_price < self.prev_bar_price:
+            # Price is down
+            self.consecutive_down_bars += 1
+            self.consecutive_up_bars = 0  # Reset up counter
+            if self.consecutive_down_bars >= self.regime_switch_threshold:
+                if self.current_regime != "MINOR":
+                    self.current_regime = "MINOR"
+                    print(f"🎵 Regime → MINOR (down trend: {self.consecutive_down_bars} bars)")
+        elif current_price > self.prev_bar_price:
+            # Price is up
+            self.consecutive_up_bars += 1
+            self.consecutive_down_bars = 0  # Reset down counter
+            if self.consecutive_up_bars >= self.regime_switch_threshold:
+                if self.current_regime != "MAJOR":
+                    self.current_regime = "MAJOR"
+                    print(f"🎵 Regime → MAJOR (up trend: {self.consecutive_up_bars} bars)")
+        # If price is flat, don't change counters or regime
+        
+        self.prev_bar_price = current_price
 
     def _minor_adjust(self, offsets: Sequence[int]) -> List[int]:
         adjusted = []
@@ -249,6 +312,15 @@ class InventionEngine:
         if rhythm in {4, 8, 16}:
             self.soprano_rhythm = rhythm
 
+    def set_bass_rhythm(self, rhythm: int) -> None:
+        """Set bass rhythm: 4 = quarter notes, 2 = half notes, 1 = whole notes"""
+        if rhythm in {1, 2, 4}:
+            self.bass_rhythm = rhythm
+
+    def set_trend_cycle(self, seconds: int) -> None:
+        """Set the trend cycle duration in seconds (10-120)"""
+        self.trend_cycle_seconds = max(10, min(120, seconds))
+
     def _generate_random_opening_price(self, min_price: float, max_price: float) -> float:
         """Generate a random opening price within the given range."""
         return self.rng.uniform(min_price, max_price)
@@ -267,6 +339,11 @@ class InventionEngine:
         self.prev_soprano_base = None
         self.melody_phase = 0
         self.clock = HarmonicClock()
+        # Reset regime tracking
+        self.current_regime = "MAJOR"
+        self.consecutive_down_bars = 0
+        self.consecutive_up_bars = 0
+        self.prev_bar_price = None
         print(f"🔄 Session reset: QQQ opening at ${self.qqq_open:.2f}, SPY opening at ${self.spy_open:.2f}")
 
     @staticmethod
@@ -408,7 +485,7 @@ class InventionEngine:
 
     def _select_chord_degree(self, regime: str) -> int:
         progression = self.chord_progressions[regime]
-        base_degree = progression[self.clock.step]
+        base_degree = progression[self.clock.progression_step]
         self.last_degree = base_degree
         return base_degree
 
@@ -419,8 +496,17 @@ class InventionEngine:
         """
         start_qqq = self.qqq_price
         start_spy = self.spy_price
-        end_qqq = self._next_price(start_qqq, step=0.6, drift=0.03)
-        end_spy = self._next_price(start_spy, step=0.45, drift=0.02)
+        
+        # Oscillating drift: cycles between bullish and bearish phases
+        import math
+        # Convert cycle duration to angular frequency: 2*pi radians per full cycle
+        cycle_speed = (2 * math.pi) / self.trend_cycle_seconds
+        cycle_position = math.sin(self.tick_count * cycle_speed)  # Oscillation based on cycle setting
+        qqq_drift = 0.05 * cycle_position  # Swings between -0.05 and +0.05
+        spy_drift = 0.03 * cycle_position  # Swings between -0.03 and +0.03
+        
+        end_qqq = self._next_price(start_qqq, step=0.6, drift=qqq_drift)
+        end_spy = self._next_price(start_spy, step=0.45, drift=spy_drift)
         self.qqq_price = end_qqq
         self.spy_price = end_spy
 
@@ -451,16 +537,21 @@ class InventionEngine:
         This is completely decoupled - price data comes as input.
         """
         start_tick = self.tick_count + 1
-        regime = self._current_regime()
-
-        if self.clock.step == 0 and self.rng.random() < 0.35:
-            self._advance_root_offset(regime)
-
+        
         # Extract price data from input
         qqq_prices = price_data["qqq_prices"]
         spy_prices = price_data["spy_prices"]
         start_qqq = qqq_prices[0]
         start_spy = spy_prices[0]
+        
+        # Update regime based on price trend (QQQ as primary indicator)
+        end_qqq = qqq_prices[-1]  # Use end of bar price for trend
+        self._update_regime_from_price(end_qqq)
+        
+        regime = self._current_regime()
+
+        if self.clock.step == 0 and self.rng.random() < 0.35:
+            self._advance_root_offset(regime)
 
         soprano_bundle: List[Optional[int]] = []
         bass_bundle: List[Optional[int]] = []
@@ -470,8 +561,15 @@ class InventionEngine:
 
         self.root_offset = 0
         root_midi = self.fixed_root_midi
-        chord_degree = 1
-        chord = self.chord_map[chord_degree]
+        
+        # DYNAMIC CHORD PROGRESSION: Advance once per bundle
+        # This ensures the chord changes over time, not stuck on one chord
+        self.clock.advance_progression()
+        chord_degree = self.chord_progressions[regime][self.clock.progression_step]
+        first_chord_degree = chord_degree  # Store for UI display
+        # Use appropriate chord map based on regime
+        active_chord_map = self.chord_map_minor if regime == "MINOR" else self.chord_map_major
+        chord = active_chord_map[chord_degree]
         chord_tone_mods = {tone % 12 for tone in chord}
         # Dynamic range: Calculate initial anchor to center the range around price
         # This prevents ceiling/floor lock when price drifts from open
@@ -482,30 +580,20 @@ class InventionEngine:
             start_spy, self.spy_open, base_midi=48, step_pct=self.spy_step_pct
         )
 
-        # FIX: Use VERY WIDE ranges to allow price tracking across large movements
-        # The issue was that pools were too narrow - when price moved, notes got clamped
-        # Now: 4+ octaves so notes can track price anywhere it goes
-        soprano_min = 48  # G3 - very wide lower bound
-        soprano_max = 108  # C8 - very wide upper bound (5 octaves!)
+        # Constrain MIDI to musical range (3 octaves each, comfortable registers)
+        # Soprano: C4 (60) to C7 (96) - bright but not piercing
+        # Bass: C2 (36) to C5 (72) - deep but audible
+        soprano_min = 60  # C4 - middle C
+        soprano_max = 84  # C6 - two octaves above middle C (comfortable soprano range)
         
-        bass_min = 36   # C2 - very wide lower bound  
-        bass_max = 84   # C6 - very wide upper bound (4 octaves!)
+        bass_min = 36   # C2 - low bass
+        bass_max = 60   # C4 - up to middle C (comfortable bass range)
 
         soprano_pool = self._get_scale_notes(regime, root_midi, soprano_min, soprano_max)
         bass_pool = self._get_scale_notes(regime, root_midi, bass_min, bass_max)
-        
-        # For visual display: use initial price anchors as reference points
-        soprano_center = max(66, min(84, initial_qqq_anchor))
-        bass_center = max(48, min(60, initial_spy_anchor))
 
         prev_qqq_price: Optional[float] = None
         prev_spy_price: Optional[float] = None
-        
-        # Store range info for visual price calculation
-        bundle_soprano_center = soprano_center
-        bundle_bass_center = bass_center
-        bundle_start_qqq = start_qqq
-        bundle_start_spy = start_spy
 
         for i in range(self.sub_steps):
             self.tick_count += 1
@@ -515,6 +603,9 @@ class InventionEngine:
             qqq_price = qqq_prices[i]
             spy_price = spy_prices[i]
 
+            # Chord is now set once per bundle (at the start) for consistent harmonic feel
+            # The progression advances between bundles, not within them
+
             # FIX: Calculate unclamped target first to maintain responsiveness
             # This allows tracking price movement even outside the audible MIDI range
             qqq_anchor_midi_raw = self._price_to_midi(
@@ -523,7 +614,7 @@ class InventionEngine:
             )
             prev_qqq_price = qqq_price
             
-            # Build chord pool (always available for arpeggiation)
+            # Build chord pool based on CURRENT chord (updates every beat)
             chord_pool = [
                 note
                 for note in soprano_pool
@@ -587,18 +678,35 @@ class InventionEngine:
                 # This GUARANTEES no overlaps
                 soprano = self.prev_soprano if self.prev_soprano is not None else 72
 
-            # BASS LOGIC: Quarter-note rhythm with stochastic jitter
+            # BASS LOGIC: Walking bass algorithm responding to SPY price direction
             bass_note: Optional[int] = None
             bass_note_price: Optional[float] = None
+            
+            # Apply bass sensitivity multiplier (bass needs wider moves to jump)
+            bass_step_pct = self.spy_step_pct / self.bass_sensitivity_multiplier
             spy_anchor_midi = self._price_to_midi(
-                spy_price, self.spy_open, base_midi=48, step_pct=self.spy_step_pct,
+                spy_price, self.spy_open, base_midi=48, step_pct=bass_step_pct,
                 prev_price=prev_spy_price
             )
+            
+            # Track SPY price direction for walking bass
+            if prev_spy_price is not None:
+                price_delta = spy_price - prev_spy_price
+                if abs(price_delta) < 0.02:  # Flat threshold
+                    self.prev_spy_direction = 0
+                elif price_delta > 0:
+                    self.prev_spy_direction = 1  # Trending up
+                else:
+                    self.prev_spy_direction = -1  # Trending down
             prev_spy_price = spy_price
 
-            # Bass generation - STRICT quarter notes only to prevent overlaps
-            if i % 4 == 0:
-                # Quarter beat ONLY: pick new bass from price with variation
+            # Bass generation - rhythm based on bass_rhythm setting
+            # bass_rhythm: 4=quarter (every 4), 2=half (every 8), 1=whole (every 16)
+            bass_rhythm_interval = 16 // self.bass_rhythm
+            should_update_bass = (i % bass_rhythm_interval == 0)
+            
+            if should_update_bass:
+                # Build chord-tone pool for current chord
                 chord_bass_pool = [
                     note
                     for note in bass_pool
@@ -606,45 +714,52 @@ class InventionEngine:
                 ]
                 allowed_bass = chord_bass_pool or bass_pool
                 
-                # Sensitivity-based distance constraint (same as soprano)
+                # Sensitivity-based distance constraint
                 if self.sensitivity >= 5.0:
                     bass_max_jump = 4  # Very tight
                 elif self.sensitivity >= 2.0:
                     bass_max_jump = 8  # Moderate
                 else:
                     bass_max_jump = 12  # Full octave
-                    
-                base_bass = self._nearest_scale_note(spy_anchor_midi, allowed_bass, max_distance=bass_max_jump)
                 
-                # HIGH SENSITIVITY: NO variation, pure price tracking
-                # LOW SENSITIVITY: More walking bass variation
-                bass_variation_chance = max(0.0, 0.4 - (self.sensitivity * 0.06))  # 0.4 at 1x, ~0.0 at 6.67x+
-                
-                # Add melodic variation ONLY at low sensitivity
-                if self.sensitivity < 3.0 and self.prev_bass is not None and len(chord_bass_pool) > 1 and self.rng.random() < bass_variation_chance:
-                    # Get nearby chord tones (within 7 semitones)
-                    nearby_chords = [n for n in chord_bass_pool if abs(n - base_bass) <= 7 and n != base_bass]
-                    if nearby_chords:
-                        # Pick one that creates stepwise motion from previous bass
-                        bass_note = min(nearby_chords, key=lambda n: abs(n - self.prev_bass))
+                # WALKING BASS ALGORITHM based on SPY direction
+                if self.prev_bass is not None and self.sensitivity < 4.0:
+                    if self.prev_spy_direction > 0:
+                        # SPY trending UP: walk up the scale toward next chord tone
+                        candidates = [n for n in allowed_bass if n > self.prev_bass and abs(n - self.prev_bass) <= bass_max_jump]
+                        if candidates:
+                            # Pick the nearest note above
+                            bass_note = min(candidates, key=lambda n: n - self.prev_bass)
+                        else:
+                            bass_note = self._nearest_scale_note(spy_anchor_midi, allowed_bass, max_distance=bass_max_jump)
+                    elif self.prev_spy_direction < 0:
+                        # SPY trending DOWN: walk down the scale toward next chord tone
+                        candidates = [n for n in allowed_bass if n < self.prev_bass and abs(n - self.prev_bass) <= bass_max_jump]
+                        if candidates:
+                            # Pick the nearest note below
+                            bass_note = max(candidates, key=lambda n: n)
+                        else:
+                            bass_note = self._nearest_scale_note(spy_anchor_midi, allowed_bass, max_distance=bass_max_jump)
                     else:
-                        bass_note = base_bass
+                        # SPY FLAT: alternate between Root and Fifth of the chord
+                        root_note = min(chord_bass_pool) if chord_bass_pool else self.prev_bass
+                        fifth_candidates = [n for n in chord_bass_pool if (n - root_midi) % 12 == 7]
+                        fifth_note = min(fifth_candidates, key=lambda n: abs(n - self.prev_bass)) if fifth_candidates else root_note
+                        # Alternate between root and fifth
+                        if self.prev_bass == root_note or abs(self.prev_bass - root_note) <= 2:
+                            bass_note = fifth_note
+                        else:
+                            bass_note = root_note
                 else:
-                    # Use price-derived note (pure tracking at high sensitivity)
-                    bass_note = base_bass
+                    # HIGH SENSITIVITY or no previous bass: pure price tracking
+                    bass_note = self._nearest_scale_note(spy_anchor_midi, allowed_bass, max_distance=bass_max_jump)
                 
                 self.prev_bass = bass_note
             else:
                 # Between quarter beats: hold the previous note
-                # This GUARANTEES no overlaps
                 bass_note = self.prev_bass
 
-            # Calculate visual price: offset from the dynamic range center
-            if bass_note is not None:
-                bass_offset_from_center = bass_note - bundle_bass_center
-                bass_note_price = bundle_start_spy * (1 + bass_offset_from_center * self.spy_step_pct)
-            else:
-                bass_note_price = None
+            # Bass note separation check (prevent soprano and bass from colliding)
 
             if bass_note is not None:
                 min_separation = 12
@@ -655,21 +770,41 @@ class InventionEngine:
                         soprano = adjusted
 
             self.prev_soprano = soprano
-            # Calculate visual price: offset from the dynamic range center
-            # This ensures notes hug the current price even when far from opening
-            soprano_offset_from_center = soprano - bundle_soprano_center
-            qqq_note_price = bundle_start_qqq * (1 + soprano_offset_from_center * self.qqq_step_pct)
+            
+            # Hybrid visual positioning: stay near price but show melodic variation
+            # Add small offset based on MIDI pitch relative to center
+            soprano_center_midi = 72  # Reference center
+            soprano_midi_offset = soprano - soprano_center_midi  # Semitones from center
+            # Scale: 0.3% of price per semitone - keeps notes dancing around price
+            soprano_visual_offset = soprano_midi_offset * (qqq_price * 0.003)
+            qqq_note_price = qqq_price + soprano_visual_offset
+            
+            # Bass visual offset
+            bass_center_midi = 48  # Reference center for bass
+            if bass_note is not None:
+                bass_midi_offset = bass_note - bass_center_midi
+                bass_visual_offset = bass_midi_offset * (spy_price * 0.003)
+                spy_note_price = spy_price + bass_visual_offset
+            else:
+                spy_note_price = None
 
             soprano_bundle.append(soprano)
             bass_bundle.append(bass_note)
             qqq_note_prices.append(round(qqq_note_price, 4))
-            spy_note_prices.append(round(bass_note_price, 4) if bass_note_price is not None else None)
+            spy_note_prices.append(round(spy_note_price, 4) if spy_note_price is not None else None)
 
             if bass_note is None:
                 divergence_steps.append(False)
             else:
                 divergence_steps.append(self._check_divergence(soprano, bass_note))
 
+        # Get chord name based on regime (major uses uppercase, minor uses lowercase)
+        # Use the FIRST chord of this bundle for consistent UI display
+        if regime == "MINOR":
+            chord_name = self.minor_chord_names.get(first_chord_degree, str(first_chord_degree))
+        else:
+            chord_name = self.chord_names.get(first_chord_degree, str(first_chord_degree))
+        
         return {
             "payload_version": "bundle_v2",
             "server_path": __file__,
@@ -683,7 +818,7 @@ class InventionEngine:
             "rvol": 1.0,
             "regime": regime,
             "divergence": any(divergence_steps),
-            "chord": chord_degree,
+            "chord": chord_name,
             "root_offset": self.root_offset,
             "start_tick": start_tick,
             "tick_count": self.tick_count,
@@ -729,12 +864,20 @@ async def update_config(payload: Dict[str, float]) -> Dict[str, object]:
     if "soprano_rhythm" in payload:
         rhythm = int(payload["soprano_rhythm"])
         engine.set_soprano_rhythm(rhythm)
+    if "bass_rhythm" in payload:
+        rhythm = int(payload["bass_rhythm"])
+        engine.set_bass_rhythm(rhythm)
+    if "trend_cycle" in payload:
+        seconds = int(payload["trend_cycle"])
+        engine.set_trend_cycle(seconds)
     return {
         "sensitivity": engine.sensitivity,
         "qqq_step_pct": engine.qqq_step_pct,
         "spy_step_pct": engine.spy_step_pct,
         "price_noise": engine.price_noise_multiplier,
         "soprano_rhythm": engine.soprano_rhythm,
+        "bass_rhythm": engine.bass_rhythm,
+        "trend_cycle": engine.trend_cycle_seconds,
     }
 
 

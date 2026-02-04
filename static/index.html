@@ -23,6 +23,7 @@
         flex-direction: column;
         height: 100vh;
         overflow: hidden;
+        transition: background 1.5s ease-in-out;
       }
       
       .main-container {
@@ -33,11 +34,11 @@
       }
 
       body.regime-bg-major {
-        background: linear-gradient(135deg, #0e1a15, #111215);
+        background: linear-gradient(135deg, #0a1f12, #111215);  /* Green tint - bullish/up */
       }
 
       body.regime-bg-minor {
-        background: linear-gradient(135deg, #101824, #111215);
+        background: linear-gradient(135deg, #1f0a0a, #111215);  /* Red tint - bearish/down */
       }
 
       body.regime-bg-whole-tone {
@@ -348,7 +349,7 @@
   <body>
     <header>
       <h1>Market Inventions</h1>
-      <div class="cache-buster">MORE_INSTRUMENTS_V95</div>
+      <div class="cache-buster">MINOR_FIX_V108</div>
       <div id="status">Disconnected</div>
     </header>
     <div class="main-container">
@@ -410,14 +411,14 @@
               QQQ Instrument
               <select id="instrument-qqq">
                 <optgroup label="Classic">
-                  <option value="electric_organ" selected>Electric Organ</option>
+                  <option value="electric_organ">Electric Organ</option>
                   <option value="harpsichord">Harpsichord</option>
                   <option value="pipe_organ">Pipe Organ</option>
                   <option value="strings">Strings</option>
                   <option value="flute">Flute</option>
                 </optgroup>
                 <optgroup label="Electronica">
-                  <option value="synth_lead">Synth Lead</option>
+                  <option value="synth_lead" selected>Synth Lead</option>
                   <option value="synth_saw">Synth Saw</option>
                   <option value="synth_pad">Synth Pad</option>
                   <option value="synth_brass">Synth Brass</option>
@@ -428,7 +429,7 @@
               SPY Instrument
               <select id="instrument-spy">
                 <optgroup label="Classic">
-                  <option value="electric_organ" selected>Electric Organ</option>
+                  <option value="electric_organ">Electric Organ</option>
                   <option value="harpsichord">Harpsichord</option>
                   <option value="pipe_organ">Pipe Organ</option>
                   <option value="strings">Strings</option>
@@ -441,7 +442,7 @@
                   <option value="synth_brass">Synth Brass</option>
                 </optgroup>
                 <optgroup label="Bass">
-                  <option value="acoustic_bass">Acoustic Bass</option>
+                  <option value="acoustic_bass" selected>Acoustic Bass</option>
                   <option value="electric_bass">Electric Bass</option>
                   <option value="slap_bass">Slap Bass</option>
                 </optgroup>
@@ -491,9 +492,9 @@
                 min="0.1"
                 max="5"
                 step="0.1"
-                value="1.0"
+                value="0.7"
               />
-              <span id="sensitivity-value" class="label">1.0x</span>
+              <span id="sensitivity-value" class="label">0.7x</span>
             </label>
             <label>
               Price Noise
@@ -503,17 +504,37 @@
                 min="0.1"
                 max="20"
                 step="0.1"
-                value="4.0"
+                value="6.7"
               />
-              <span id="price-noise-value" class="label">4.0x</span>
+              <span id="price-noise-value" class="label">6.7x</span>
             </label>
             <label>
               QQQ Rhythm
               <select id="soprano-rhythm">
-                <option value="4" selected>Quarter Notes (1/4)</option>
-                <option value="8">Eighth Notes (1/8)</option>
+                <option value="4">Quarter Notes (1/4)</option>
+                <option value="8" selected>Eighth Notes (1/8)</option>
                 <option value="16">Sixteenth Notes (1/16)</option>
               </select>
+            </label>
+            <label>
+              SPY Rhythm
+              <select id="bass-rhythm">
+                <option value="4">Quarter Notes (1/4)</option>
+                <option value="2" selected>Half Notes (1/2)</option>
+                <option value="1">Whole Notes (1/1)</option>
+              </select>
+            </label>
+            <label>
+              Trend Cycle
+              <input
+                id="trend-cycle"
+                type="range"
+                min="10"
+                max="120"
+                step="5"
+                value="40"
+              />
+              <span id="trend-cycle-value" class="label">40s</span>
             </label>
           </div>
           <div class="control-row" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; margin-top: 8px;">
@@ -569,6 +590,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
-    <script src="script.js?v=95"></script>
+    <script type="module" src="main.js"></script>
   </body>
 </html>
