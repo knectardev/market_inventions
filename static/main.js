@@ -41,6 +41,7 @@ const init = () => {
     bassRhythmSelect,
     trendCycleSlider,
     trendCycleValueEl,
+    chordProgressionSelect,
     syncOffsetSlider,
     syncOffsetValueEl,
     glowDurationSlider,
@@ -76,7 +77,8 @@ const init = () => {
     priceNoise: priceNoiseSlider?.value ?? 6.7,
     sopranoRhythm: sopranoRhythmSelect?.value ?? 8,
     bassRhythm: bassRhythmSelect?.value ?? 2,
-    trendCycle: trendCycleSlider?.value ?? 40
+    trendCycle: trendCycleSlider?.value ?? 40,
+    chordProgression: chordProgressionSelect?.value ?? "classical"
   });
 
   // Sensitivity slider
@@ -85,10 +87,10 @@ const init = () => {
     sensitivitySlider.addEventListener("input", (event) => {
       updateSensitivityDisplay(event.target.value);
       const cfg = getConfigValues();
-      setConfig(event.target.value, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle);
+      setConfig(event.target.value, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle, cfg.chordProgression);
     });
     const cfg = getConfigValues();
-    setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle);
+    setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle, cfg.chordProgression);
   }
 
   // Price noise slider
@@ -97,7 +99,7 @@ const init = () => {
     priceNoiseSlider.addEventListener("input", (event) => {
       updatePriceNoiseDisplay(event.target.value);
       const cfg = getConfigValues();
-      setConfig(cfg.sensitivity, event.target.value, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle);
+      setConfig(cfg.sensitivity, event.target.value, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle, cfg.chordProgression);
     });
   }
 
@@ -128,7 +130,7 @@ const init = () => {
   if (sopranoRhythmSelect) {
     sopranoRhythmSelect.addEventListener("change", (event) => {
       const cfg = getConfigValues();
-      setConfig(cfg.sensitivity, cfg.priceNoise, event.target.value, cfg.bassRhythm, cfg.trendCycle);
+      setConfig(cfg.sensitivity, cfg.priceNoise, event.target.value, cfg.bassRhythm, cfg.trendCycle, cfg.chordProgression);
     });
   }
 
@@ -136,7 +138,7 @@ const init = () => {
   if (bassRhythmSelect) {
     bassRhythmSelect.addEventListener("change", (event) => {
       const cfg = getConfigValues();
-      setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, event.target.value, cfg.trendCycle);
+      setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, event.target.value, cfg.trendCycle, cfg.chordProgression);
     });
   }
 
@@ -148,7 +150,15 @@ const init = () => {
         trendCycleValueEl.textContent = `${value}s`;
       }
       const cfg = getConfigValues();
-      setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, value);
+      setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, value, cfg.chordProgression);
+    });
+  }
+
+  // Chord progression select
+  if (chordProgressionSelect) {
+    chordProgressionSelect.addEventListener("change", (event) => {
+      const cfg = getConfigValues();
+      setConfig(cfg.sensitivity, cfg.priceNoise, cfg.sopranoRhythm, cfg.bassRhythm, cfg.trendCycle, event.target.value);
     });
   }
 

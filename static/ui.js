@@ -26,6 +26,7 @@ export const elements = {
   bassRhythmSelect: null,
   trendCycleSlider: null,
   trendCycleValueEl: null,
+  chordProgressionSelect: null,
   sopranoEl: null,
   bassEl: null,
   regimeEl: null,
@@ -67,6 +68,7 @@ export const initUI = () => {
   elements.bassRhythmSelect = document.getElementById("bass-rhythm");
   elements.trendCycleSlider = document.getElementById("trend-cycle");
   elements.trendCycleValueEl = document.getElementById("trend-cycle-value");
+  elements.chordProgressionSelect = document.getElementById("chord-progression");
   elements.sopranoEl = document.getElementById("soprano");
   elements.bassEl = document.getElementById("bass");
   elements.regimeEl = document.getElementById("regime");

@@ -20,7 +20,7 @@ import { logLine, updateStatus, elements } from './ui.js';
 import { addVisualBundle, addAnchor, formatRootOffset } from './visualizer.js';
 import { handleLegacyTick } from './legacyHandler.js';
 
-export const setConfig = async (sensitivityValue, priceNoiseValue, sopranoRhythmValue, bassRhythmValue, trendCycleValue) => {
+export const setConfig = async (sensitivityValue, priceNoiseValue, sopranoRhythmValue, bassRhythmValue, trendCycleValue, chordProgressionValue) => {
   const { sensitivityValueEl, priceNoiseValueEl } = elements;
   
   if (sensitivityValueEl) {
@@ -40,6 +40,7 @@ export const setConfig = async (sensitivityValue, priceNoiseValue, sopranoRhythm
         soprano_rhythm: Number(sopranoRhythmValue ?? 8),
         bass_rhythm: Number(bassRhythmValue ?? 2),
         trend_cycle: Number(trendCycleValue ?? 40),
+        chord_progression: chordProgressionValue ?? "classical",
       }),
     });
     if (!response.ok) {
@@ -48,10 +49,8 @@ export const setConfig = async (sensitivityValue, priceNoiseValue, sopranoRhythm
     }
     const data = await response.json();
     if (data?.sensitivity !== undefined) {
-      const sopranoLabel = data.soprano_rhythm === 4 ? "1/4" : data.soprano_rhythm === 8 ? "1/8" : "1/16";
-      const bassLabel = data.bass_rhythm === 4 ? "1/4" : data.bass_rhythm === 2 ? "1/2" : "1/1";
       logLine(
-        `Sensitivity: ${Number(data.sensitivity).toFixed(2)}x | Cycle: ${data.trend_cycle}s`
+        `Progression: ${data.chord_progression} | Cycle: ${data.trend_cycle}s`
       );
     }
   } catch (error) {

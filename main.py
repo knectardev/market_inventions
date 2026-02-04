@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-BUILD_ID = "MINOR_FIX_V90"
+BUILD_ID = "CHORD_FIX_V93"
 
 class VoiceLeading:
     """Pick the closest chord tone to the previous note."""
@@ -130,20 +130,35 @@ class InventionEngine:
         self.qqq_step_pct = self.base_qqq_step_pct
         self.spy_step_pct = self.base_spy_step_pct
         self.price_noise_multiplier = 6.7
-        self.chord_progressions = {
-            "MAJOR": [
-                1, 1, 4, 4,
-                2, 2, 5, 5,
-                6, 6, 4, 4,
-                5, 5, 1, 1,
-            ],
-            "MINOR": [
-                1, 1, 4, 4,
-                6, 6, 2, 2,
-                3, 3, 7, 7,
-                5, 5, 1, 1,
-            ],
+        # Available chord progression presets
+        self.progression_presets = {
+            "classical": {
+                "MAJOR": [1, 1, 4, 4, 2, 2, 5, 5, 6, 6, 4, 4, 5, 5, 1, 1],
+                "MINOR": [1, 1, 4, 4, 6, 6, 2, 2, 3, 3, 7, 7, 5, 5, 1, 1],
+            },
+            "pop": {  # I-V-vi-IV (Axis of Awesome)
+                "MAJOR": [1, 1, 1, 1, 5, 5, 5, 5, 6, 6, 6, 6, 4, 4, 4, 4],
+                "MINOR": [1, 1, 1, 1, 7, 7, 7, 7, 6, 6, 6, 6, 4, 4, 4, 4],
+            },
+            "blues": {  # 12-bar blues (extended to 16)
+                "MAJOR": [1, 1, 1, 1, 4, 4, 1, 1, 5, 5, 4, 4, 1, 1, 5, 5],
+                "MINOR": [1, 1, 1, 1, 4, 4, 1, 1, 5, 5, 4, 4, 1, 1, 5, 5],
+            },
+            "jazz": {  # ii-V-I turnarounds
+                "MAJOR": [2, 2, 5, 5, 1, 1, 1, 1, 2, 2, 5, 5, 1, 1, 6, 6],
+                "MINOR": [2, 2, 5, 5, 1, 1, 1, 1, 4, 4, 7, 7, 3, 3, 6, 6],
+            },
+            "canon": {  # Pachelbel's Canon
+                "MAJOR": [1, 1, 5, 5, 6, 6, 3, 3, 4, 4, 1, 1, 4, 4, 5, 5],
+                "MINOR": [1, 1, 5, 5, 6, 6, 3, 3, 4, 4, 1, 1, 4, 4, 5, 5],
+            },
+            "fifties": {  # 50s doo-wop (I-vi-IV-V)
+                "MAJOR": [1, 1, 1, 1, 6, 6, 6, 6, 4, 4, 4, 4, 5, 5, 5, 5],
+                "MINOR": [1, 1, 1, 1, 6, 6, 6, 6, 4, 4, 4, 4, 5, 5, 5, 5],
+            },
         }
+        self.current_progression_key = "classical"
+        self.chord_progressions = self.progression_presets["classical"]
         # Major chord map: I=major, ii=minor, iii=minor, IV=major, V=major, vi=minor, vii°=dim
         self.chord_map_major = {
             1: [0, 4, 7],    # I   - major
@@ -320,6 +335,13 @@ class InventionEngine:
     def set_trend_cycle(self, seconds: int) -> None:
         """Set the trend cycle duration in seconds (10-120)"""
         self.trend_cycle_seconds = max(10, min(120, seconds))
+
+    def set_chord_progression(self, key: str) -> None:
+        """Set the chord progression preset"""
+        if key in self.progression_presets:
+            self.current_progression_key = key
+            self.chord_progressions = self.progression_presets[key]
+            print(f"🎵 Chord progression → {key}")
 
     def _generate_random_opening_price(self, min_price: float, max_price: float) -> float:
         """Generate a random opening price within the given range."""
@@ -567,6 +589,9 @@ class InventionEngine:
         self.clock.advance_progression()
         chord_degree = self.chord_progressions[regime][self.clock.progression_step]
         first_chord_degree = chord_degree  # Store for UI display
+        # Debug: print chord progression info every 4 bundles
+        if self.tick_count % 4 == 0:
+            print(f"🎹 Step {self.clock.progression_step}/16 | Chord: {chord_degree} | Preset: {self.current_progression_key}")
         # Use appropriate chord map based on regime
         active_chord_map = self.chord_map_minor if regime == "MINOR" else self.chord_map_major
         chord = active_chord_map[chord_degree]
@@ -856,7 +881,7 @@ async def build_info() -> Dict[str, str]:
 
 
 @app.post("/config")
-async def update_config(payload: Dict[str, float]) -> Dict[str, object]:
+async def update_config(payload: Dict[str, object]) -> Dict[str, object]:
     multiplier = float(payload.get("sensitivity", 1.0))
     engine.set_sensitivity(multiplier)
     noise = float(payload.get("price_noise", engine.price_noise_multiplier))
@@ -870,6 +895,8 @@ async def update_config(payload: Dict[str, float]) -> Dict[str, object]:
     if "trend_cycle" in payload:
         seconds = int(payload["trend_cycle"])
         engine.set_trend_cycle(seconds)
+    if "chord_progression" in payload:
+        engine.set_chord_progression(payload["chord_progression"])
     return {
         "sensitivity": engine.sensitivity,
         "qqq_step_pct": engine.qqq_step_pct,
@@ -878,6 +905,7 @@ async def update_config(payload: Dict[str, float]) -> Dict[str, object]:
         "soprano_rhythm": engine.soprano_rhythm,
         "bass_rhythm": engine.bass_rhythm,
         "trend_cycle": engine.trend_cycle_seconds,
+        "chord_progression": engine.current_progression_key,
     }
 
 
