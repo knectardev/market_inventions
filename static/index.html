@@ -348,7 +348,7 @@
   <body>
     <header>
       <h1>Market Inventions</h1>
-      <div class="cache-buster">TIGHT NOTE WINDOW V73</div>
+      <div class="cache-buster">MORE_INSTRUMENTS_V95</div>
       <div id="status">Disconnected</div>
     </header>
     <div class="main-container">
@@ -409,21 +409,42 @@
             <label>
               QQQ Instrument
               <select id="instrument-qqq">
-                <option value="electric_organ" selected>Electric Organ</option>
-                <option value="harpsichord">Harpsichord</option>
-                <option value="pipe_organ">Pipe Organ</option>
-                <option value="strings">Strings</option>
-                <option value="flute">Flute</option>
+                <optgroup label="Classic">
+                  <option value="electric_organ" selected>Electric Organ</option>
+                  <option value="harpsichord">Harpsichord</option>
+                  <option value="pipe_organ">Pipe Organ</option>
+                  <option value="strings">Strings</option>
+                  <option value="flute">Flute</option>
+                </optgroup>
+                <optgroup label="Electronica">
+                  <option value="synth_lead">Synth Lead</option>
+                  <option value="synth_saw">Synth Saw</option>
+                  <option value="synth_pad">Synth Pad</option>
+                  <option value="synth_brass">Synth Brass</option>
+                </optgroup>
               </select>
             </label>
             <label>
               SPY Instrument
               <select id="instrument-spy">
-                <option value="electric_organ" selected>Electric Organ</option>
-                <option value="harpsichord">Harpsichord</option>
-                <option value="pipe_organ">Pipe Organ</option>
-                <option value="strings">Strings</option>
-                <option value="flute">Flute</option>
+                <optgroup label="Classic">
+                  <option value="electric_organ" selected>Electric Organ</option>
+                  <option value="harpsichord">Harpsichord</option>
+                  <option value="pipe_organ">Pipe Organ</option>
+                  <option value="strings">Strings</option>
+                  <option value="flute">Flute</option>
+                </optgroup>
+                <optgroup label="Electronica">
+                  <option value="synth_lead">Synth Lead</option>
+                  <option value="synth_saw">Synth Saw</option>
+                  <option value="synth_pad">Synth Pad</option>
+                  <option value="synth_brass">Synth Brass</option>
+                </optgroup>
+                <optgroup label="Bass">
+                  <option value="acoustic_bass">Acoustic Bass</option>
+                  <option value="electric_bass">Electric Bass</option>
+                  <option value="slap_bass">Slap Bass</option>
+                </optgroup>
               </select>
             </label>
             <label>
@@ -431,8 +452,32 @@
               QQQ Visible
             </label>
             <label>
+              Soprano Volume
+              <input
+                id="soprano-volume"
+                type="range"
+                min="-60"
+                max="0"
+                step="1"
+                value="-6"
+              />
+              <span id="soprano-volume-value" class="label">-6 dB</span>
+            </label>
+            <label>
               <input id="toggle-spy" type="checkbox" checked />
               SPY Visible
+            </label>
+            <label>
+              Bass Volume
+              <input
+                id="bass-volume"
+                type="range"
+                min="-60"
+                max="0"
+                step="1"
+                value="-6"
+              />
+              <span id="bass-volume-value" class="label">-6 dB</span>
             </label>
             <label>
               <input id="toggle-note-labels" type="checkbox" />
@@ -444,7 +489,7 @@
                 id="sensitivity"
                 type="range"
                 min="0.1"
-                max="10"
+                max="5"
                 step="0.1"
                 value="1.0"
               />
@@ -456,19 +501,58 @@
                 id="price-noise"
                 type="range"
                 min="0.1"
-                max="5"
+                max="20"
                 step="0.1"
-                value="1.0"
+                value="4.0"
               />
-              <span id="price-noise-value" class="label">1.0x</span>
+              <span id="price-noise-value" class="label">4.0x</span>
             </label>
             <label>
               QQQ Rhythm
               <select id="soprano-rhythm">
-                <option value="4">Quarter Notes (1/4)</option>
+                <option value="4" selected>Quarter Notes (1/4)</option>
                 <option value="8">Eighth Notes (1/8)</option>
-                <option value="16" selected>Sixteenth Notes (1/16)</option>
+                <option value="16">Sixteenth Notes (1/16)</option>
               </select>
+            </label>
+          </div>
+          <div class="control-row" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; margin-top: 8px;">
+            <span class="label" style="color: #f1c04a;">Audio-Visual Sync Tuning</span>
+            <label>
+              Sync Offset
+              <input
+                id="sync-offset"
+                type="range"
+                min="0"
+                max="3000"
+                step="10"
+                value="1670"
+              />
+              <span id="sync-offset-value" class="label">1670ms</span>
+            </label>
+            <label>
+              Glow Duration
+              <input
+                id="glow-duration"
+                type="range"
+                min="1"
+                max="8"
+                step="1"
+                value="3"
+              />
+              <span id="glow-duration-value" class="label">3 units</span>
+            </label>
+            <label>
+              Future Notes
+              <input
+                id="future-visibility"
+                type="range"
+                min="0"
+                max="5000"
+                step="100"
+                value="0"
+              />
+              <span id="future-visibility-value" class="label">0ms</span>
             </label>
           </div>
         </div>
@@ -485,6 +569,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
-    <script src="script.js?v=73"></script>
+    <script src="script.js?v=95"></script>
   </body>
 </html>

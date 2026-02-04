@@ -10,6 +10,10 @@ const sensitivitySlider = document.getElementById("sensitivity");
 const sensitivityValueEl = document.getElementById("sensitivity-value");
 const priceNoiseSlider = document.getElementById("price-noise");
 const priceNoiseValueEl = document.getElementById("price-noise-value");
+const sopranoVolumeSlider = document.getElementById("soprano-volume");
+const sopranoVolumeValueEl = document.getElementById("soprano-volume-value");
+const bassVolumeSlider = document.getElementById("bass-volume");
+const bassVolumeValueEl = document.getElementById("bass-volume-value");
 const sopranoRhythmSelect = document.getElementById("soprano-rhythm");
 const sopranoEl = document.getElementById("soprano");
 const bassEl = document.getElementById("bass");
@@ -23,6 +27,12 @@ const buildIdEl = document.getElementById("build-id");
 const buildRuntimeEl = document.getElementById("build-runtime");
 const qqqPriceEl = document.getElementById("qqq-price");
 const spyPriceEl = document.getElementById("spy-price");
+const syncOffsetSlider = document.getElementById("sync-offset");
+const syncOffsetValueEl = document.getElementById("sync-offset-value");
+const glowDurationSlider = document.getElementById("glow-duration");
+const glowDurationValueEl = document.getElementById("glow-duration-value");
+const futureVisibilitySlider = document.getElementById("future-visibility");
+const futureVisibilityValueEl = document.getElementById("future-visibility-value");
 
 // Separate WebSockets for architectural decoupling
 let priceSocket = null;  // Always connected - streams price data only
@@ -37,11 +47,21 @@ let transportStarted = false;
 const SUB_STEP_COUNT = 16;
 const SUB_STEP_SECONDS = 1 / SUB_STEP_COUNT;
 const MAX_BUNDLE_QUEUE = 4;
+
+// Manual fallback if baseLatency is not available (in seconds)
+const FALLBACK_BASE_LATENCY = 0.2; // 200ms - typical hardware output delay
+
+// Tunable sync parameters (can be adjusted via UI sliders)
+let syncOffsetMs = 1670; // Total milliseconds to subtract from visual timeline
+let glowDurationUnits = 3; // How many 16th-note units the glow lasts
+let futureVisibilityMs = 2000; // How far ahead (in ms) future notes are visible
 const bundleQueue = [];
 const DEBUG_BUNDLE = true;
 let lastDebugTick = null;
 let lastMessageLog = 0;
 let buildAnnounced = false;
+let uiEvents = []; // Queue for Regime, Chord, and Price text updates
+let nextVisualStartTime = 0; // Persistent anchor for visual timing - prevents queue-depth jitter
 
 const regimeClassMap = {
   MAJOR: "regime-major",
@@ -58,6 +78,7 @@ const regimeBackgroundMap = {
 };
 
 const instrumentMap = {
+  // Classic/Baroque
   harpsichord: {
     label: "Harpsichord",
     baseUrl:
@@ -82,6 +103,43 @@ const instrumentMap = {
     label: "Flute",
     baseUrl:
       "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/flute-mp3/",
+  },
+  // Electronica/Synth
+  synth_lead: {
+    label: "Synth Lead",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/lead_1_square-mp3/",
+  },
+  synth_saw: {
+    label: "Synth Saw",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/lead_2_sawtooth-mp3/",
+  },
+  synth_pad: {
+    label: "Synth Pad",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/pad_2_warm-mp3/",
+  },
+  synth_brass: {
+    label: "Synth Brass",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/synthbrass_1-mp3/",
+  },
+  // Bass
+  acoustic_bass: {
+    label: "Acoustic Bass",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/acoustic_bass-mp3/",
+  },
+  electric_bass: {
+    label: "Electric Bass",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/electric_bass_finger-mp3/",
+  },
+  slap_bass: {
+    label: "Slap Bass",
+    baseUrl:
+      "https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/slap_bass_1-mp3/",
   },
 };
 
@@ -374,97 +432,120 @@ const handleLegacyTick = ({
   }
 };
 
-const addVisualBundle = (bundle, baseEventTimeMs) => {
-  const baseTime = baseEventTimeMs ?? performance.now();
+const addVisualBundle = (bundle, baseTransportTimeMs, realTimeBaseMs) => {
   let prevSopranoMidi = null;
   let prevBassMidi = null;
-  let sopranoStartIndex = -1;
-  let bassStartIndex = -1;
+  let sopranoNoteRef = null;
+  let bassNoteRef = null;
   
-  for (let i = 0; i < bundle.soprano_bundle.length; i += 1) {
-    const offsetSeconds = i * SUB_STEP_SECONDS;
-    const eventTime = baseTime + offsetSeconds * 1000;
+  // Real-world time base for price anchors (decoupled from audio timeline)
+  const priceTimeBase = realTimeBaseMs ?? performance.now();
+  
+  for (let i = 0; i < bundle.soprano_bundle.length; i++) {
+    const offsetMs = i * SUB_STEP_SECONDS * 1000;
+    const eventTime = baseTransportTimeMs + offsetMs;  // Transport time for notes
+    const priceEventTime = priceTimeBase + offsetMs;    // Real-world time for prices
     const tick = (bundle.start_tick ?? 0) + i;
 
+    // --- Soprano Processing ---
     const sopranoMidi = bundle.soprano_bundle[i];
-    // When soprano note changes, calculate duration until next change
     if (sopranoMidi !== null && sopranoMidi !== undefined && sopranoMidi !== prevSopranoMidi) {
-      // If there was a previous note, we now know its actual duration
-      if (prevSopranoMidi !== null && sopranoStartIndex >= 0) {
-        const duration = i - sopranoStartIndex;
-        // Update the last added soprano note with correct duration
-        const lastSopranoNote = noteEvents.filter(e => e.voice === "soprano").pop();
-        if (lastSopranoNote) {
-          lastSopranoNote.durationUnits = duration;
-        }
+      // Close the previous note's duration
+      if (sopranoNoteRef) {
+        sopranoNoteRef.endTime = eventTime;
       }
       
-      const sopranoPrice = bundle.qqq_note_prices[i];
-      addNoteEvent(
-        sopranoMidi,
-        "soprano",
-        sopranoPrice,
-        tick,
-        0,
-        eventTime,
-        1  // Start with 1 unit, will be updated when note changes
-      );
+      // Create new note
+      sopranoNoteRef = {
+        midi: sopranoMidi,
+        voice: "soprano",
+        price: bundle.qqq_note_prices[i],
+        tick: tick,
+        time: eventTime,
+        endTime: eventTime + (SUB_STEP_SECONDS * 1000), // Default 1 unit
+        durationUnits: 1
+      };
+      noteEvents.push(sopranoNoteRef);
       prevSopranoMidi = sopranoMidi;
-      sopranoStartIndex = i;
+    } else if (sopranoMidi === prevSopranoMidi && sopranoNoteRef) {
+      // Extend duration of the current note
+      sopranoNoteRef.durationUnits++;
+      sopranoNoteRef.endTime += (SUB_STEP_SECONDS * 1000);
     }
 
-    if (Array.isArray(bundle.bass_bundle)) {
-      const bassMidi = bundle.bass_bundle[i];
-      // When bass note changes, calculate duration until next change
-      if (bassMidi !== null && bassMidi !== undefined && bassMidi !== prevBassMidi) {
-        // If there was a previous note, we now know its actual duration
-        if (prevBassMidi !== null && bassStartIndex >= 0) {
-          const duration = i - bassStartIndex;
-          // Update the last added bass note with correct duration
-          const lastBassNote = noteEvents.filter(e => e.voice === "bass").pop();
-          if (lastBassNote) {
-            lastBassNote.durationUnits = duration;
-          }
-        }
-        
-        const bassPrice = bundle.spy_note_prices[i];
-        addNoteEvent(
-          bassMidi,
-          "bass",
-          bassPrice,
-          tick,
-          0,
-          eventTime,
-          1  // Start with 1 unit, will be updated when note changes
-        );
-        prevBassMidi = bassMidi;
-        bassStartIndex = i;
+    // --- Bass Processing ---
+    const bassMidi = bundle.bass_bundle ? bundle.bass_bundle[i] : null;
+    if (bassMidi !== null && bassMidi !== undefined && bassMidi !== prevBassMidi) {
+      if (bassNoteRef) {
+        bassNoteRef.endTime = eventTime;
       }
+      bassNoteRef = {
+        midi: bassMidi,
+        voice: "bass",
+        price: bundle.spy_note_prices ? bundle.spy_note_prices[i] : null,
+        tick: tick,
+        time: eventTime,
+        endTime: eventTime + (SUB_STEP_SECONDS * 1000),
+        durationUnits: 1
+      };
+      noteEvents.push(bassNoteRef);
+      prevBassMidi = bassMidi;
+    } else if (bassMidi === prevBassMidi && bassNoteRef) {
+      bassNoteRef.durationUnits++;
+      bassNoteRef.endTime += (SUB_STEP_SECONDS * 1000);
     }
 
+    // --- Price Anchors (use real-world time, NOT Transport time) ---
     if (tick % SUB_STEP_COUNT === 0) {
-      if (bundle.qqq_prices[i] !== undefined) {
-        addAnchor("soprano", bundle.qqq_prices[i], tick, eventTime);
+      if (bundle.qqq_prices && bundle.qqq_prices[i] !== undefined) {
+        addAnchor("soprano", bundle.qqq_prices[i], tick, priceEventTime);
       }
-      if (bundle.spy_prices[i] !== undefined) {
-        addAnchor("bass", bundle.spy_prices[i], tick, eventTime);
+      if (bundle.spy_prices && bundle.spy_prices[i] !== undefined) {
+        addAnchor("bass", bundle.spy_prices[i], tick, priceEventTime);
       }
     }
   }
+
+  // Final Cleanup: Keep noteEvents array performant
+  if (noteEvents.length > 500) {
+    noteEvents.splice(0, noteEvents.length - 500);
+  }
+};
+
+const processUIUpdates = (now) => {
+  // Find the UI event that is closest to 'now' without being in the future
+  let currentUIState = null;
   
-  // Handle the last notes in the bundle - extend to end of bundle
-  if (sopranoStartIndex >= 0) {
-    const duration = bundle.soprano_bundle.length - sopranoStartIndex;
-    const lastSopranoNote = noteEvents.filter(e => e.voice === "soprano").pop();
-    if (lastSopranoNote) {
-      lastSopranoNote.durationUnits = duration;
+  // Iterate backwards to find the most recent state that should be active
+  for (let i = uiEvents.length - 1; i >= 0; i--) {
+    if (uiEvents[i].time <= now) {
+      currentUIState = uiEvents[i];
+      break;
     }
   }
-  if (bassStartIndex >= 0) {
-    const duration = bundle.bass_bundle.length - bassStartIndex;
-    const lastBassNote = noteEvents.filter(e => e.voice === "bass").pop();
-    if (lastBassNote) {
-      lastBassNote.durationUnits = duration;
+
+  if (currentUIState) {
+    // Update DOM elements
+    if (sopranoEl) sopranoEl.textContent = currentUIState.soprano ?? "--";
+    if (bassEl) bassEl.textContent = currentUIState.bass ?? "--";
+    if (regimeEl) regimeEl.textContent = currentUIState.regime || "--";
+    if (chordEl) chordEl.textContent = currentUIState.chord ?? "--";
+    if (rootOffsetEl) rootOffsetEl.textContent = currentUIState.rootOffset ?? "--";
+    if (rootOffsetNoteEl) rootOffsetNoteEl.textContent = currentUIState.rootOffsetNote || "--";
+    if (tickEl) tickEl.textContent = currentUIState.tick ?? "--";
+    if (rvolEl) rvolEl.textContent = currentUIState.rvol ?? "--";
+    if (qqqPriceEl) qqqPriceEl.textContent = currentUIState.qqqPrice ? `$${currentUIState.qqqPrice.toFixed(2)}` : "--";
+    if (spyPriceEl) spyPriceEl.textContent = currentUIState.spyPrice ? `$${currentUIState.spyPrice.toFixed(2)}` : "--";
+    
+    // Update regime styling
+    const regimeKey = String(currentUIState.regime || "").toUpperCase();
+    regimeEl.classList.remove(...Object.values(regimeClassMap));
+    if (regimeClassMap[regimeKey]) {
+      regimeEl.classList.add(regimeClassMap[regimeKey]);
+    }
+    document.body.classList.remove(...Object.values(regimeBackgroundMap));
+    if (regimeBackgroundMap[regimeKey]) {
+      document.body.classList.add(regimeBackgroundMap[regimeKey]);
     }
   }
 };
@@ -473,11 +554,13 @@ const drawPriceLine = (events, min, max, top, bottom, color) => {
   if (events.length < 2) {
     return;
   }
+  // Price lines ALWAYS use real-world time - completely decoupled from audio
+  const realNow = performance.now();
   canvasCtx.strokeStyle = color;
   canvasCtx.lineWidth = 2;
   canvasCtx.beginPath();
   events.forEach((event, index) => {
-    const secondsFromNow = (event.time - performance.now()) / 1000;
+    const secondsFromNow = (event.time - realNow) / 1000;
     const x = (canvas.clientWidth * playheadFraction) +
       secondsFromNow * noteConfig.pixelsPerSecond;
     const y = scaleY(event.price, min, max, top, bottom);
@@ -498,7 +581,18 @@ const drawVisualizer = () => {
     : canvasBackground.normal;
   canvasCtx.fillRect(0, 0, width, height);
 
-  const now = performance.now();
+  // CRITICAL SYNC FIX: Use Tone.Transport clock when playing, performance.now() when stopped
+  // Subtract syncOffsetMs (tunable via slider) to align visual with audio
+  let now;
+  if (isPlaying && transportStarted) {
+    now = (Tone.Transport.seconds * 1000) - syncOffsetMs;
+  } else {
+    now = performance.now();
+  }
+  
+  // Sync the Text UI with audio timeline
+  processUIUpdates(now);
+  
   const playheadX = width * playheadFraction;
   const visibleEvents = filterRecent(noteEvents, now);
   const qqqEvents = visibleEvents.filter((event) => event.voice === "soprano");
@@ -523,8 +617,10 @@ const drawVisualizer = () => {
     noteConfig.minDisplayMidi,
     noteConfig.maxDisplayMidi
   );
-  const qqqAnchors = filterRecent(priceAnchors.soprano, now);
-  const spyAnchors = filterRecent(priceAnchors.bass, now);
+  // Price anchors use real-world time - filter with performance.now()
+  const realNow = performance.now();
+  const qqqAnchors = filterRecent(priceAnchors.soprano, realNow);
+  const spyAnchors = filterRecent(priceAnchors.bass, realNow);
 
   const qqqPrices = [
     ...qqqAnchors.map((event) => event.price),
@@ -547,6 +643,7 @@ const drawVisualizer = () => {
   const spyTop = mid + lanePadding;
   const spyBottom = height - bottomAxisReserve;
 
+  // Price lines use real-world time - completely decoupled from audio timeline
   drawPriceLine(
     qqqAnchors,
     qqqMin,
@@ -565,16 +662,19 @@ const drawVisualizer = () => {
   );
 
   for (const event of visibleEvents) {
-    const secondsFromNow = (event.time - now) / 1000;
+    // Calculate horizontal position relative to the Audio Transport 'now'
+    const msFromNow = event.time - now;
+    const secondsFromNow = msFromNow / 1000;
     
-    // Only show notes that are within 0.25 seconds of playing (just-in-time display)
-    // This creates a smooth appearance as notes emerge right before playing
-    if (secondsFromNow > 0.25) {
+    // Cull notes that are too far in the future (controlled by slider)
+    if (msFromNow > futureVisibilityMs) {
       continue;
     }
     
     const x = playheadX + secondsFromNow * noteConfig.pixelsPerSecond;
-    if (x < -20 || x > width + 20) {
+    
+    // Cull off-screen notes (past notes that scrolled off left edge)
+    if (x < -200 || x > width + 200) {
       continue;
     }
     
@@ -585,41 +685,25 @@ const drawVisualizer = () => {
       ? scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, qqqTop, qqqBottom)
       : scaleY(clamp(event.midi, noteMin, noteMax), noteMin, noteMax, spyTop, spyBottom);
     
-    // Check if note is currently playing (for highlight effect)
-    const isPlaying = event.endTime && now >= event.time && now <= event.endTime;
+    // Note is "active" (glowing) based on glowDurationUnits (tunable via slider)
+    const glowDurationMs = glowDurationUnits * SUB_STEP_SECONDS * 1000;
+    const isNoteActive = now >= event.time && now <= (event.time + glowDurationMs);
     
-    const baseColor =
-      event.voice === "soprano"
-        ? noteConfig.sopranoColor
-        : noteConfig.bassColor;
-    
-    // Highlight playing notes with brighter color and glow
-    if (isPlaying) {
-      canvasCtx.fillStyle = event.voice === "soprano"
-        ? "rgba(124, 255, 194, 1.0)" // Full opacity green
-        : "rgba(122, 167, 255, 1.0)"; // Full opacity blue
-      
-      // Add glow effect
-      canvasCtx.shadowColor = event.voice === "soprano"
-        ? "rgba(231, 10, 10, 0.8)"
-        : "rgba(255, 0, 0, 0.8)";
-      canvasCtx.shadowBlur = 12;
+    // Visual Polish for active notes
+    if (isNoteActive) {
+      canvasCtx.fillStyle = "#ffffff";
+      canvasCtx.shadowColor = event.voice === "soprano" ? noteConfig.sopranoColor : noteConfig.bassColor;
+      canvasCtx.shadowBlur = 15;
     } else {
-      canvasCtx.fillStyle = baseColor;
+      canvasCtx.fillStyle = event.voice === "soprano" ? noteConfig.sopranoColor : noteConfig.bassColor;
       canvasCtx.shadowBlur = 0;
     }
     
-    // Calculate width based on note duration (1, 2, or 4 units)
-    // One 16th note unit = pixelsPerSecond / 16
-    const durationUnits = event.durationUnits ?? 1;
-    const noteWidth = (noteConfig.pixelsPerSecond / 16) * durationUnits;
-    
-    // Draw note with larger height if playing
-    const noteHeight = isPlaying ? 8 : 6;
-    const noteYOffset = isPlaying ? 4 : 3;
-    canvasCtx.fillRect(x, y - noteYOffset, noteWidth, noteHeight);
-    
-    // Reset shadow
+    // Calculate width using actual time delta for precise visual alignment
+    const noteDurationMs = (event.endTime || (event.time + SUB_STEP_SECONDS * 1000)) - event.time;
+    const noteWidth = (noteDurationMs / 1000) * noteConfig.pixelsPerSecond;
+    const noteHeight = isNoteActive ? 10 : 6;
+    canvasCtx.fillRect(x, y - (noteHeight/2), noteWidth, noteHeight);
     canvasCtx.shadowBlur = 0;
 
     if (toggleNoteLabels?.checked) {
@@ -940,41 +1024,19 @@ const connectMusicSocket = () => {
           updateStatus("Connected (build id missing)");
         }
       }
-      const lastIndex = soprano_bundle.length - 1;
-      const lastSoprano =
-        lastIndex >= 0 ? soprano_bundle[lastIndex] : undefined;
-      const lastBass =
-        Array.isArray(bass_bundle) && lastIndex >= 0
-          ? bass_bundle[lastIndex]
-          : undefined;
 
-      sopranoEl.textContent = lastSoprano ?? "--";
-      bassEl.textContent = lastBass ?? "--";
-      regimeEl.textContent = regimeKey || "--";
-      chordEl.textContent = chord ?? "--";
-      const rootDisplay = formatRootOffset(root_offset);
-      rootOffsetEl.textContent = rootDisplay.offset;
-      rootOffsetNoteEl.textContent = rootDisplay.note;
-      tickEl.textContent = start_tick ?? "--";
-      rvolEl.textContent = rvol;
-      if (buildIdEl) {
-        buildIdEl.textContent = build_id ?? "--";
-      }
-      qqqPriceEl.textContent = qqq_price ? `$${qqq_price}` : "--";
-      spyPriceEl.textContent = spy_price ? `$${spy_price}` : "--";
-
-      regimeEl.classList.remove(...Object.values(regimeClassMap));
-      if (regimeClassMap[regimeKey]) {
-        regimeEl.classList.add(regimeClassMap[regimeKey]);
+      // Calculate the exact Transport Time this bundle will begin playing
+      const bundleDuration = soprano_bundle.length * SUB_STEP_SECONDS;
+      
+      // Use persistent anchor to prevent queue-depth race condition
+      // Initialize if this is the first bundle or anchor has fallen behind
+      if (bundleQueue.length === 0 || nextVisualStartTime < Tone.Transport.seconds) {
+        nextVisualStartTime = Tone.Transport.seconds;
       }
 
-      document.body.classList.remove(...Object.values(regimeBackgroundMap));
-      if (regimeBackgroundMap[regimeKey]) {
-        document.body.classList.add(regimeBackgroundMap[regimeKey]);
-      }
+      const visualStartTimeMs = nextVisualStartTime * 1000;
 
-      divergenceActive = Boolean(divergence);
-
+      // Prepare safe arrays for visuals
       const safeSpyPrices =
         Array.isArray(spy_prices) && spy_prices.length === qqq_prices.length
           ? spy_prices
@@ -989,6 +1051,9 @@ const connectMusicSocket = () => {
         spy_note_prices.length === qqq_prices.length
           ? spy_note_prices
           : new Array(qqq_prices.length).fill(undefined);
+
+      // Pass the Transport-relative time for notes, real-world time for price anchors
+      const realTimeNow = performance.now();
       addVisualBundle(
         {
           soprano_bundle,
@@ -999,8 +1064,39 @@ const connectMusicSocket = () => {
           spy_note_prices: safeSpyNotePrices,
           start_tick,
         },
-        performance.now()
+        visualStartTimeMs,
+        realTimeNow  // Real-world time for price anchors (decoupled from audio)
       );
+      
+      // Add UI snapshot to the queue (will be displayed when Transport reaches this time)
+      const rootDisplay = formatRootOffset(root_offset);
+      const lastIndex = soprano_bundle.length - 1;
+      const lastSoprano = lastIndex >= 0 ? soprano_bundle[lastIndex] : undefined;
+      const lastBass = Array.isArray(bass_bundle) && lastIndex >= 0 ? bass_bundle[lastIndex] : undefined;
+      
+      uiEvents.push({
+        time: visualStartTimeMs,
+        regime: regimeKey,
+        chord: chord,
+        rootOffset: rootDisplay.offset,
+        rootOffsetNote: rootDisplay.note,
+        qqqPrice: qqq_price,
+        spyPrice: spy_price,
+        tick: start_tick,
+        rvol: rvol,
+        soprano: lastSoprano,
+        bass: lastBass
+      });
+      
+      // Keep the UI queue manageable
+      if (uiEvents.length > 50) {
+        uiEvents.shift();
+      }
+      
+      // Increment anchor for the NEXT bundle (prevents queue-depth jitter)
+      nextVisualStartTime += bundleDuration;
+
+      // Push to audio queue
       bundleQueue.push({
         soprano_bundle,
         bass_bundle,
@@ -1011,24 +1107,17 @@ const connectMusicSocket = () => {
         start_tick,
         divergence,
       });
-      if (DEBUG_BUNDLE && start_tick !== lastDebugTick) {
-        lastDebugTick = start_tick;
-        const sopranoPreview = soprano_bundle
-          .slice(0, 8)
-          .join(", ");
-        const notePricePreview = safeQqqNotePrices
-          .slice(0, 8)
-          .map((value) =>
-            value === undefined || value === null ? "--" : value.toFixed(2)
-          )
-          .join(", ");
-        logLine(
-          `Bundle ${start_tick ?? "?"}: [${sopranoPreview}] | prices [${notePricePreview}]`
-        );
-      }
+      
       if (bundleQueue.length > MAX_BUNDLE_QUEUE) {
         bundleQueue.shift();
       }
+      
+      if (DEBUG_BUNDLE && start_tick !== lastDebugTick) {
+        lastDebugTick = start_tick;
+        logLine(`Bundle ${start_tick}: VisualAnchor ${nextVisualStartTime.toFixed(2)}s`);
+      }
+      
+      divergenceActive = Boolean(divergence);
       return;
     }
 
@@ -1053,6 +1142,10 @@ const connectMusicSocket = () => {
   });
 };
 
+// Track last played notes across bundles to prevent retriggering
+let lastPlayedSoprano = null;
+let lastPlayedBass = null;
+
 const scheduleBundle = (bundle, time) => {
   if (!sopranoSampler || !bassSampler) {
     return;
@@ -1062,10 +1155,10 @@ const scheduleBundle = (bundle, time) => {
   const detuneTarget = bundle.divergence ? -100 : 0;
 
   if (sopranoSampler.detune) {
-    sopranoSampler.detune.rampTo(detuneTarget, 0.05);
+    sopranoSampler.detune.rampTo(detuneTarget, 0.3);  // Slower ramp to avoid artifacts
   }
   if (bassSampler.detune) {
-    bassSampler.detune.rampTo(detuneTarget, 0.05);
+    bassSampler.detune.rampTo(detuneTarget, 0.3);  // Slower ramp to avoid artifacts
   }
 
   // Get soprano note duration based on rhythm setting
@@ -1073,8 +1166,9 @@ const scheduleBundle = (bundle, time) => {
   const sopranoDuration = sopranoRhythm === 4 ? "4n" : sopranoRhythm === 8 ? "8n" : "16n";
   const rhythmInterval = 16 / sopranoRhythm; // 4 for quarter, 2 for eighth, 1 for sixteenth
 
-  let prevSopranoMidi = null;
-  let prevBassMidi = null;
+  // Use persistent tracking to avoid retriggering across bundle boundaries
+  let prevSopranoMidi = lastPlayedSoprano;
+  let prevBassMidi = lastPlayedBass;
 
   for (let i = 0; i < bundle.soprano_bundle.length; i += 1) {
     const offsetSeconds = i * SUB_STEP_SECONDS;
@@ -1096,6 +1190,7 @@ const scheduleBundle = (bundle, time) => {
           scheduledTime
         );
         prevSopranoMidi = sopranoMidi;
+        lastPlayedSoprano = sopranoMidi;  // Persist across bundles
       }
     }
 
@@ -1115,6 +1210,7 @@ const scheduleBundle = (bundle, time) => {
           scheduledTime
         );
         prevBassMidi = bassMidi;
+        lastPlayedBass = bassMidi;  // Persist across bundles
       }
     }
   }
@@ -1125,6 +1221,11 @@ const stopPlayback = () => {
   isPlaying = false;
   transportStarted = false;
   bundleQueue.length = 0;
+  uiEvents.length = 0;
+  // Reset note tracking to prevent retriggering on restart
+  lastPlayedSoprano = null;
+  lastPlayedBass = null;
+  nextVisualStartTime = 0;
   if (transportLoop) {
     transportLoop.stop();
     transportLoop.dispose();
@@ -1164,7 +1265,7 @@ const loadSampler = async (instrumentKey) => {
         C5: "C5.mp3",
       },
       baseUrl: config.baseUrl,
-      release: 1,
+      release: 0.2,  // Reduced from 1 to 0.2 to prevent massive overlaps at high sensitivity
       onload: () => resolve(sampler),
     }).toDestination();
   });
@@ -1185,6 +1286,9 @@ const loadSampler = async (instrumentKey) => {
 
 const startPlayback = async () => {
   await Tone.start();
+  
+  // Log sync settings
+  logLine(`Sync: offset=${syncOffsetMs}ms, glow=${glowDurationUnits} units | Use sliders to tune!`);
 
   const loadToken = (loadCounter += 1);
   const shouldReconnect = !isPlaying;
@@ -1221,6 +1325,14 @@ const startPlayback = async () => {
 
     sopranoSampler = qqqSampler;
     bassSampler = spySampler;
+    
+    // Set initial volumes from sliders
+    if (sopranoVolumeSlider) {
+      sopranoSampler.volume.value = parseFloat(sopranoVolumeSlider.value);
+    }
+    if (bassVolumeSlider) {
+      bassSampler.volume.value = parseFloat(bassVolumeSlider.value);
+    }
   } catch (error) {
     logLine(error.message);
     updateStatus("Sample load timed out");
@@ -1283,11 +1395,64 @@ if (priceNoiseSlider) {
     setConfig(sensitivitySlider?.value ?? 1.0, event.target.value, sopranoRhythmSelect?.value ?? 16);
   });
 }
+if (sopranoVolumeSlider) {
+  sopranoVolumeValueEl.textContent = `${sopranoVolumeSlider.value} dB`;
+  sopranoVolumeSlider.addEventListener("input", (event) => {
+    const volumeDb = parseFloat(event.target.value);
+    sopranoVolumeValueEl.textContent = `${volumeDb} dB`;
+    if (sopranoSampler) {
+      sopranoSampler.volume.value = volumeDb;
+    }
+  });
+}
+if (bassVolumeSlider) {
+  bassVolumeValueEl.textContent = `${bassVolumeSlider.value} dB`;
+  bassVolumeSlider.addEventListener("input", (event) => {
+    const volumeDb = parseFloat(event.target.value);
+    bassVolumeValueEl.textContent = `${volumeDb} dB`;
+    if (bassSampler) {
+      bassSampler.volume.value = volumeDb;
+    }
+  });
+}
 if (sopranoRhythmSelect) {
   sopranoRhythmSelect.addEventListener("change", (event) => {
     setConfig(sensitivitySlider?.value ?? 1.0, priceNoiseSlider?.value ?? 1.0, event.target.value);
   });
 }
+
+// Sync tuning sliders - adjust these in real-time to find perfect audio-visual alignment
+if (syncOffsetSlider) {
+  syncOffsetSlider.addEventListener("input", (event) => {
+    syncOffsetMs = parseInt(event.target.value, 10);
+    if (syncOffsetValueEl) {
+      syncOffsetValueEl.textContent = `${syncOffsetMs}ms`;
+    }
+  });
+  // Initialize from slider value
+  syncOffsetMs = parseInt(syncOffsetSlider.value, 10);
+}
+if (glowDurationSlider) {
+  glowDurationSlider.addEventListener("input", (event) => {
+    glowDurationUnits = parseInt(event.target.value, 10);
+    if (glowDurationValueEl) {
+      glowDurationValueEl.textContent = `${glowDurationUnits} unit${glowDurationUnits > 1 ? 's' : ''}`;
+    }
+  });
+  // Initialize from slider value
+  glowDurationUnits = parseInt(glowDurationSlider.value, 10);
+}
+if (futureVisibilitySlider) {
+  futureVisibilitySlider.addEventListener("input", (event) => {
+    futureVisibilityMs = parseInt(event.target.value, 10);
+    if (futureVisibilityValueEl) {
+      futureVisibilityValueEl.textContent = `${futureVisibilityMs}ms`;
+    }
+  });
+  // Initialize from slider value
+  futureVisibilityMs = parseInt(futureVisibilitySlider.value, 10);
+}
+
 // Connect price stream immediately on page load
 // This runs independently of audio/music
 connectPriceSocket();

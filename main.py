@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
-BUILD_ID = "TIGHT_NOTE_WINDOW_V73"
+BUILD_ID = "INVERTED_SENSITIVITY_FIX_V81"
 
 class VoiceLeading:
     """Pick the closest chord tone to the previous note."""
@@ -236,8 +236,10 @@ class InventionEngine:
     def set_sensitivity(self, multiplier: float) -> None:
         safe_multiplier = max(0.1, min(multiplier, 10.0))
         self.sensitivity = safe_multiplier
-        self.qqq_step_pct = self.base_qqq_step_pct / safe_multiplier
-        self.spy_step_pct = self.base_spy_step_pct / safe_multiplier
+        # MULTIPLY sensitivity to make notes MORE responsive to price changes
+        # Higher sensitivity = larger step = more semitones per % price change
+        self.qqq_step_pct = self.base_qqq_step_pct * safe_multiplier
+        self.spy_step_pct = self.base_spy_step_pct * safe_multiplier
 
     def set_price_noise(self, multiplier: float) -> None:
         self.price_noise_multiplier = max(0.1, min(multiplier, 5.0))
@@ -294,9 +296,15 @@ class InventionEngine:
         ]
 
     @staticmethod
-    def _nearest_scale_note(target_midi: int, scale_pool: Sequence[int]) -> int:
+    def _nearest_scale_note(target_midi: int, scale_pool: Sequence[int], max_distance: int = 12) -> int:
+        """Find nearest scale note, preferring notes within max_distance semitones."""
         if not scale_pool:
             return target_midi
+        # First try to find a note within max_distance
+        nearby = [note for note in scale_pool if abs(note - target_midi) <= max_distance]
+        if nearby:
+            return min(nearby, key=lambda note: abs(note - target_midi))
+        # If no close notes, find the absolute nearest (fallback)
         return min(scale_pool, key=lambda note: abs(note - target_midi))
 
     @staticmethod
@@ -474,22 +482,21 @@ class InventionEngine:
             start_spy, self.spy_open, base_midi=48, step_pct=self.spy_step_pct
         )
 
-        # Soprano range: 12 semitones (1 octave) centered on price anchor
-        # Keep center in comfortable audible range (66-84 = F#4-C6, ~370-1046 Hz)
-        soprano_half_range = 12
-        soprano_center = max(66, min(84, initial_qqq_anchor))
-        soprano_min = max(60, soprano_center - soprano_half_range)  # Min C4 (~262 Hz)
-        soprano_max = min(96, soprano_center + soprano_half_range)  # Max C6 (~1046 Hz)
-
-        # Bass range: 10 semitones centered on price anchor
-        # Keep center in comfortable audible range (48-60 = C3-C4, ~130-262 Hz)
-        bass_half_range = 10
-        bass_center = max(48, min(60, initial_spy_anchor))
-        bass_min = max(42, bass_center - bass_half_range)  # Min F#2 (~92 Hz)
-        bass_max = min(72, bass_center + bass_half_range)  # Max C5 (~523 Hz)
+        # FIX: Use VERY WIDE ranges to allow price tracking across large movements
+        # The issue was that pools were too narrow - when price moved, notes got clamped
+        # Now: 4+ octaves so notes can track price anywhere it goes
+        soprano_min = 48  # G3 - very wide lower bound
+        soprano_max = 108  # C8 - very wide upper bound (5 octaves!)
+        
+        bass_min = 36   # C2 - very wide lower bound  
+        bass_max = 84   # C6 - very wide upper bound (4 octaves!)
 
         soprano_pool = self._get_scale_notes(regime, root_midi, soprano_min, soprano_max)
         bass_pool = self._get_scale_notes(regime, root_midi, bass_min, bass_max)
+        
+        # For visual display: use initial price anchors as reference points
+        soprano_center = max(66, min(84, initial_qqq_anchor))
+        bass_center = max(48, min(60, initial_spy_anchor))
 
         prev_qqq_price: Optional[float] = None
         prev_spy_price: Optional[float] = None
@@ -540,31 +547,38 @@ class InventionEngine:
             # Soprano generation - STRICT rhythm adherence to prevent overlaps
             # ONLY update at rhythm boundaries, hold between
             if should_update_soprano:
-                # At rhythm boundary: pick note with melodic variation
-                base_soprano = self._nearest_scale_note(qqq_anchor_midi_raw, allowed_soprano)
+                # HIGH SENSITIVITY (>=5): Tight tracking within 4 semitones
+                # MED SENSITIVITY (2-5): Moderate tracking within 8 semitones  
+                # LOW SENSITIVITY (<2): Full octave range
+                if self.sensitivity >= 5.0:
+                    max_jump = 4  # Very tight - within a major third
+                elif self.sensitivity >= 2.0:
+                    max_jump = 8  # Moderate - within a major sixth
+                else:
+                    max_jump = 12  # Full octave
+                    
+                base_soprano = self._nearest_scale_note(qqq_anchor_midi_raw, allowed_soprano, max_distance=max_jump)
                 
-                # Add melodic variation to prevent locked patterns
-                # Pick from nearby scale notes (±2 scale degrees) weighted toward the anchor
-                if self.prev_soprano is not None:
+                # HIGH SENSITIVITY: NO variation, pure price tracking
+                # LOW SENSITIVITY: More melodic variation and independence
+                variation_chance = max(0.0, 0.5 - (self.sensitivity * 0.08))  # 0.5 at 1x, ~0.0 at 6.25x+
+                
+                # Add melodic variation ONLY at low sensitivity
+                if self.sensitivity < 3.0 and self.prev_soprano is not None and self.rng.random() < variation_chance:
                     # Get notes within ±2 scale degrees
                     nearby_notes = [
                         self._offset_scale_degree(base_soprano, soprano_pool, offset)
                         for offset in [-2, -1, 0, 1, 2]
                     ]
                     # Remove duplicates and ensure they're in range
-                    nearby_notes = list(set([n for n in nearby_notes if n in soprano_pool]))
-                    
-                    # Weighted random choice: 50% anchor, 50% neighbors
-                    if nearby_notes and self.rng.random() < 0.5:
-                        # Choose a neighbor note
-                        neighbors = [n for n in nearby_notes if n != base_soprano]
-                        if neighbors:
-                            soprano = self.rng.choice(neighbors)
-                        else:
-                            soprano = base_soprano
+                    nearby_notes = list(set([n for n in nearby_notes if n is not None and soprano_min <= n <= soprano_max]))
+                    if len(nearby_notes) > 1:
+                        # Pick a nearby note for variation
+                        soprano = self.rng.choice(nearby_notes)
                     else:
                         soprano = base_soprano
                 else:
+                    # Use price-derived note (pure tracking at high sensitivity)
                     soprano = base_soprano
                 
                 self.prev_soprano = soprano
@@ -591,11 +605,23 @@ class InventionEngine:
                     if (note - root_midi) % 12 in chord_tone_mods
                 ]
                 allowed_bass = chord_bass_pool or bass_pool
-                base_bass = self._nearest_scale_note(spy_anchor_midi, allowed_bass)
                 
-                # Add melodic variation for walking bass line
-                # 40% chance to pick a nearby chord tone or scale degree
-                if self.prev_bass is not None and len(chord_bass_pool) > 1 and self.rng.random() < 0.4:
+                # Sensitivity-based distance constraint (same as soprano)
+                if self.sensitivity >= 5.0:
+                    bass_max_jump = 4  # Very tight
+                elif self.sensitivity >= 2.0:
+                    bass_max_jump = 8  # Moderate
+                else:
+                    bass_max_jump = 12  # Full octave
+                    
+                base_bass = self._nearest_scale_note(spy_anchor_midi, allowed_bass, max_distance=bass_max_jump)
+                
+                # HIGH SENSITIVITY: NO variation, pure price tracking
+                # LOW SENSITIVITY: More walking bass variation
+                bass_variation_chance = max(0.0, 0.4 - (self.sensitivity * 0.06))  # 0.4 at 1x, ~0.0 at 6.67x+
+                
+                # Add melodic variation ONLY at low sensitivity
+                if self.sensitivity < 3.0 and self.prev_bass is not None and len(chord_bass_pool) > 1 and self.rng.random() < bass_variation_chance:
                     # Get nearby chord tones (within 7 semitones)
                     nearby_chords = [n for n in chord_bass_pool if abs(n - base_bass) <= 7 and n != base_bass]
                     if nearby_chords:
@@ -604,6 +630,7 @@ class InventionEngine:
                     else:
                         bass_note = base_bass
                 else:
+                    # Use price-derived note (pure tracking at high sensitivity)
                     bass_note = base_bass
                 
                 self.prev_bass = bass_note
